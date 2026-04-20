@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Keeps the commit-SHA pins in .github/workflows/*.yml fresh. Without
+  # this, the pins rot — new releases include security fixes we'd miss.
+  # Dependabot re-pins to the latest release's SHA and updates the
+  # version comment next to it.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - ci
+      - dependencies
+    groups:
+      # One PR per week with all action bumps rather than N separate PRs.
+      actions:
+        patterns:
+          - '*'

@@ -9,10 +9,14 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Changeset present
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # Bot-authored PRs (changesets "Version Packages", upstream-bump,
     # dependabot) manage their own changesets.
     if: |
@@ -20,9 +24,10 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       !contains(github.event.pull_request.labels.*.name, 'skip-changeset')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Decide if a changeset is required
         id: decide
