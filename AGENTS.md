@@ -51,6 +51,33 @@ bench/                      E2E bench runners:
   upstream-bump.yml         Nightly poll of coraza + coraza-coreruleset releases
 ```
 
+## Priority order
+
+**Security > Performance.** Always. This is a WAF — if it doesn't correctly
+block attacks, throughput is irrelevant. Rules that follow from this
+priority:
+
+- **Never sacrifice security for performance unless the trade-off is
+  explicit, controlled, and opt-in.** An env var the user consciously
+  flips is acceptable; a silent fast-path that drops detections is not.
+- **Fail closed on WAF errors.** If the WAF throws, crashes, or
+  otherwise can't evaluate a request, the default MUST be to block
+  (`onWAFError: 'block'` in adapters). Fail-open is an opt-in for
+  availability-critical deployments and must be explicit.
+- **Any perf experiment must measure block rate, not just RPS.** The
+  batch-phases experiment shipped a +1.4% throughput change that also
+  fixed a 60% attack-miss bug — we only caught that because the k6
+  scenario counts `blocked` separately. Keep it that way. A perf change
+  that ships unnoticed attack escapes is a bug, not an optimization.
+- **Default to stricter.** Host-regex routes to V8 (faster but backtracking-capable).
+  Keep it default-on, but every bypass-shaped defensive check (like
+  method/URL/addr length clipping in `encodeRequestBundle`) must keep
+  the request flowing into the WAF even when data is oversized. Never
+  throw into a path the adapter might catch-and-next.
+
+See `docs/security.md` for the threat model, known caveats (ReDoS,
+Unicode case-insensitive, UTF-8 encoding), and the fail-closed checklist.
+
 ## Architectural invariants
 
 1. **One WASM ABI**. All adapters go through `@coraza/core`. Never add a

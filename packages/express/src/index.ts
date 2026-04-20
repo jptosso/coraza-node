@@ -52,6 +52,19 @@ export interface CorazaExpressOptions {
    * Pass `false` to disable bypass altogether.
    */
   skip?: SkipOptions | false
+  /**
+   * What to do if the WAF itself throws mid-request (WASM trap, pool
+   * worker crash, bundle encoding error, etc.).
+   *
+   *   'allow' — call next() and let the request through (fail-open).
+   *             Matches pre-2.x behavior but is an attack vector: a
+   *             crafted request that reliably crashes the WAF becomes a
+   *             bypass. Only use if availability beats security for you.
+   *
+   *   'block' — respond with 503 via onBlock (fail-closed). Default.
+   *             Matches what a dedicated WAF sidecar would do.
+   */
+  onWAFError?: 'allow' | 'block'
 }
 
 type ReqWithLog = Request & { log?: Logger }
@@ -59,7 +72,12 @@ type ReqWithLog = Request & { log?: Logger }
 const encoder = new TextEncoder()
 
 export function coraza(options: CorazaExpressOptions): RequestHandler {
-  const { waf, onBlock = defaultBlock, inspectResponse = false } = options
+  const {
+    waf,
+    onBlock = defaultBlock,
+    inspectResponse = false,
+    onWAFError = 'block',
+  } = options
   const shouldSkip = options.skip === false ? () => false : buildSkipPredicate(options.skip)
 
   // `waf` is either a sync WAF or an async WAFPool. Both expose the same
@@ -77,6 +95,14 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
       tx = await waf.newTransaction()
     } catch (err) {
       log.error('coraza: newTransaction failed', { err: (err as Error).message })
+      if (onWAFError === 'block' && !res.headersSent) {
+        onBlock(
+          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable' },
+          req,
+          res,
+        )
+        return
+      }
       next()
       return
     }
@@ -129,6 +155,18 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
       next()
     } catch (err) {
       log.error('coraza: middleware error', { err: (err as Error).message })
+      if (onWAFError === 'block') {
+        // Fail-closed: synthesize a 503 block verdict so a crash in the
+        // WAF can't be weaponized into a bypass.
+        if (!res.headersSent) {
+          onBlock(
+            { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error' },
+            req,
+            res,
+          )
+        }
+        return
+      }
       next()
     }
   }

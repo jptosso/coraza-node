@@ -61,14 +61,21 @@ describe('@coraza/express', () => {
     expect(tx?.uri).toBeUndefined()
   })
 
-  it('skips body processing when isRequestBodyAccessible is false', async () => {
+  it('runs body phase regardless of isRequestBodyAccessible (bundle always fires phase 2)', async () => {
+    // With batch-phases, phase 2 runs even when body access is disabled —
+    // matches Coraza's intended flow (anomaly score block evaluates at
+    // phase 2). The isRequestBodyAccessible predicate is a hint for
+    // adapters deciding whether to serialize a body, not a gate on
+    // whether phase 2 runs at all. Prior to batch-phases we were
+    // silently skipping phase 2 on body-less requests — a 60% attack
+    // miss rate. See docs/security.md.
     const { waf, state } = mockWAF('block', {
-      onBody: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'should not fire' }),
+      onBody: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'fires at phase 2' }),
     })
     state.reqBodyAccessible = false
     const app = appWith(coraza({ waf }))
     const res = await request(app).post('/echo').send({ msg: 'benign' })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(403)
   })
 
   it('honors a custom onBlock', async () => {
@@ -112,9 +119,8 @@ describe('@coraza/express', () => {
     expect(res.status).toBe(200)
   })
 
-  it('continues (does not crash) when middleware itself throws', async () => {
+  it('fails closed by default when middleware itself throws (onWAFError default)', async () => {
     const { waf } = mockWAF('block')
-    // Poison newTransaction to throw.
     const origNew = waf.newTransaction.bind(waf)
     let thrown = false
     waf.newTransaction = () => {
@@ -126,7 +132,25 @@ describe('@coraza/express', () => {
     }
     const app = appWith(coraza({ waf }))
     const res = await request(app).get('/hi')
-    expect(res.status).toBe(200) // request continued past middleware
+    // Default is fail-closed — an error in the WAF returns 503. See
+    // docs/security.md: a crafted crash must not become a bypass.
+    expect(res.status).toBe(503)
+  })
+
+  it('fails open when onWAFError is explicitly set to allow', async () => {
+    const { waf } = mockWAF('block')
+    const origNew = waf.newTransaction.bind(waf)
+    let thrown = false
+    waf.newTransaction = () => {
+      if (!thrown) {
+        thrown = true
+        throw new Error('boom')
+      }
+      return origNew()
+    }
+    const app = appWith(coraza({ waf, onWAFError: 'allow' }))
+    const res = await request(app).get('/hi')
+    expect(res.status).toBe(200)
   })
 
   it('inspects response body and blocks when rule fires on it (inspectResponse: true)', async () => {

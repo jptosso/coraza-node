@@ -60,6 +60,11 @@ export async function instantiate(
   // Coraza calls `rx_compile` at WAF init for every CRS regex (~1300),
   // then `rx_match` on every request. V8's Irregexp JIT beats Go's regex
   // running inside WASM by a lot.
+  //
+  // Escape hatch: set `CORAZA_HOST_RX=off` to force every pattern to
+  // fall back to Go's stdlib regex inside the WASM. Use this if you're
+  // worried about V8's backtracking ReDoS surface — see docs/security.md.
+  const hostRxDisabled = process.env.CORAZA_HOST_RX === 'off'
   const hostRx = createHostRegex()
 
   const envImports = {
@@ -77,12 +82,12 @@ export async function instantiate(
     // Host-regex imports. Return 0 on compile failure so the Go side can
     // fall back to stdlib regex for PCRE features JS can't handle.
     rx_compile(patPtr: number, patLen: number): number {
-      if (!abi) return 0
+      if (!abi || hostRxDisabled) return 0
       const pat = abi.readString(patPtr, patLen)
       return hostRx.compile(pat)
     },
     rx_match(handle: number, inputPtr: number, inputLen: number): number {
-      if (!abi) return 0
+      if (!abi || hostRxDisabled) return 0
       const input = abi.readString(inputPtr, inputLen)
       return hostRx.match(handle, input) ? 1 : 0
     },

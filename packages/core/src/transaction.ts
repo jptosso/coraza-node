@@ -307,6 +307,19 @@ export class Transaction {
 
 const bundleEncoder = new TextEncoder()
 
+// Truncate a UTF-8 byte slice at `maxBytes` without splitting a multi-byte
+// character. The WAF needs to evaluate *something* even if the field was
+// attacker-inflated; throwing would let the adapter's catch→next() path
+// turn the request into an unintended bypass.
+function truncateUtf8(b: Uint8Array, maxBytes: number): Uint8Array {
+  if (b.length <= maxBytes) return b
+  let end = maxBytes
+  // Step back over any continuation bytes (10xxxxxx) so we don't split a
+  // codepoint; 4 bytes is the UTF-8 max so at most 3 steps.
+  while (end > 0 && (b[end]! & 0xc0) === 0x80) end--
+  return b.subarray(0, end)
+}
+
 /**
  * Pack connection+URI+headers+body into the compact binary bundle format
  * that `tx_process_request_bundle` decodes on the WASM side. See wasm/bundle.go
@@ -317,21 +330,22 @@ export function encodeRequestBundle(
   body: Uint8Array | string | undefined,
   headerBuf?: { current: Uint8Array },
 ): Uint8Array {
-  const method = bundleEncoder.encode(req.method)
+  // Clip oversize fields rather than throw. Throwing would let the
+  // adapter's catch-and-next() fallback turn a crafted-long-method
+  // request into a WAF bypass. Clipping keeps the request evaluated.
+  // These limits are an order of magnitude above anything legitimate
+  // (method="PROPFIND" = 8 bytes, proto="HTTP/1.1" = 8 bytes).
+  const method = truncateUtf8(bundleEncoder.encode(req.method), 255)
+  const proto = truncateUtf8(bundleEncoder.encode(req.protocol ?? 'HTTP/1.1'), 255)
+  const addr = truncateUtf8(bundleEncoder.encode(req.remoteAddr ?? ''), 65535)
   const url = bundleEncoder.encode(req.url)
-  const proto = bundleEncoder.encode(req.protocol ?? 'HTTP/1.1')
-  const addr = bundleEncoder.encode(req.remoteAddr ?? '')
-  const cport = req.remotePort ?? 0
-  const sport = req.serverPort ?? 0
+  const cport = (req.remotePort ?? 0) & 0xffff
+  const sport = (req.serverPort ?? 0) & 0xffff
 
   const hdrPkt = encodeHeaders(req.headers, headerBuf)
 
   const bodyBytes =
     typeof body === 'string' ? bundleEncoder.encode(body) : (body ?? new Uint8Array(0))
-
-  if (method.length > 255) throw new Error('coraza: method too long (>255 bytes)')
-  if (proto.length > 255) throw new Error('coraza: protocol too long (>255 bytes)')
-  if (addr.length > 65535) throw new Error('coraza: remoteAddr too long (>64KB)')
 
   const total =
     2 + addr.length + // addr

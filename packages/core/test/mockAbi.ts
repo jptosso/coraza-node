@@ -221,6 +221,56 @@ export function createMock(opts: MockOptions = {}): {
       }
       return 0
     },
+    tx_process_request_bundle: (id, ptr, len) => {
+      // Minimal bundle decoder — mirror the wire format in wasm/bundle.go.
+      // Only decodes enough to populate the same mock state fields that
+      // the individual process_* calls would set, then applies the
+      // caller's onHeaders/onBody predicates (checked in wire order).
+      const t = state.txs.get(id)
+      if (!t) {
+        state.lastError = 'unknown tx'
+        return -1
+      }
+      const m = mem()
+      const view = new DataView(m.buffer, m.byteOffset + ptr, len)
+      let o = 0
+      const addrLen = view.getUint16(o, true); o += 2
+      const addr = new TextDecoder().decode(m.subarray(ptr + o, ptr + o + addrLen))
+      o += addrLen
+      const cport = view.getUint16(o, true); o += 2
+      const sport = view.getUint16(o, true); o += 2
+      const methodLen = m[ptr + o]!; o += 1
+      const method = new TextDecoder().decode(m.subarray(ptr + o, ptr + o + methodLen))
+      o += methodLen
+      const protoLen = m[ptr + o]!; o += 1
+      const proto = new TextDecoder().decode(m.subarray(ptr + o, ptr + o + protoLen))
+      o += protoLen
+      const urlLen = view.getUint32(o, true); o += 4
+      const uri = new TextDecoder().decode(m.subarray(ptr + o, ptr + o + urlLen))
+      o += urlLen
+      const hdrLen = view.getUint32(o, true); o += 4
+      t.headers = decodePacket(m, ptr + o, hdrLen)
+      o += hdrLen
+      const bodyLen = view.getUint32(o, true); o += 4
+      t.lastBody = m.slice(ptr + o, ptr + o + bodyLen)
+
+      t.conn = { addr, cport, sport }
+      t.uri = { method, uri, proto }
+
+      // Phase-1 header predicate first (matches real Coraza order).
+      const hdrIt = opts.onHeaders?.(t)
+      if (hdrIt) {
+        t.interrupt = hdrIt
+        return 1
+      }
+      // Phase-2 body predicate second.
+      const bodyIt = opts.onBody?.(t)
+      if (bodyIt) {
+        t.interrupt = bodyIt
+        return 1
+      }
+      return 0
+    },
     tx_append_request_body: (id, ptr, len) => {
       const t = state.txs.get(id)
       if (!t) {
