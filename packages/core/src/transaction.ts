@@ -127,6 +127,30 @@ export class Transaction {
     return this.#abi.exports.tx_is_response_body_processable(this.#id) === 1
   }
 
+  /**
+   * Fused call that runs the connection, URI, header, and body phases in
+   * one WASM entry. Saves ~10 boundary crossings vs individual calls —
+   * big win under `WAFPool` where every crossing is a MessagePort round-trip.
+   *
+   * Only usable when the request body is already buffered (Express's
+   * body-parser runs before our middleware, so it always is in practice).
+   */
+  processRequestBundle(
+    req: RequestInfo,
+    body: Uint8Array | string | undefined,
+  ): boolean {
+    this.#ensureOpen()
+    const bundle = encodeRequestBundle(req, body, this.#headerBuf)
+    const ptr = this.#writeMalloc(bundle)
+    try {
+      const rc = this.#abi.exports.tx_process_request_bundle(this.#id, ptr, bundle.length)
+      this.#abi.check(rc, 'tx_process_request_bundle')
+      return rc === 1
+    } finally {
+      this.#abi.exports.host_free(ptr)
+    }
+  }
+
   /** Process the full request body in one shot. Returns true on interruption. */
   processRequestBody(body?: Uint8Array | string): boolean {
     this.#ensureOpen()
@@ -279,4 +303,63 @@ export class Transaction {
     this.#abi.writeAt(ptr, bytes)
     return ptr
   }
+}
+
+const bundleEncoder = new TextEncoder()
+
+/**
+ * Pack connection+URI+headers+body into the compact binary bundle format
+ * that `tx_process_request_bundle` decodes on the WASM side. See wasm/bundle.go
+ * for the layout spec — keep these in lockstep.
+ */
+export function encodeRequestBundle(
+  req: RequestInfo,
+  body: Uint8Array | string | undefined,
+  headerBuf?: { current: Uint8Array },
+): Uint8Array {
+  const method = bundleEncoder.encode(req.method)
+  const url = bundleEncoder.encode(req.url)
+  const proto = bundleEncoder.encode(req.protocol ?? 'HTTP/1.1')
+  const addr = bundleEncoder.encode(req.remoteAddr ?? '')
+  const cport = req.remotePort ?? 0
+  const sport = req.serverPort ?? 0
+
+  const hdrPkt = encodeHeaders(req.headers, headerBuf)
+
+  const bodyBytes =
+    typeof body === 'string' ? bundleEncoder.encode(body) : (body ?? new Uint8Array(0))
+
+  if (method.length > 255) throw new Error('coraza: method too long (>255 bytes)')
+  if (proto.length > 255) throw new Error('coraza: protocol too long (>255 bytes)')
+  if (addr.length > 65535) throw new Error('coraza: remoteAddr too long (>64KB)')
+
+  const total =
+    2 + addr.length + // addr
+    2 + 2 + // cport + sport
+    1 + method.length +
+    1 + proto.length +
+    4 + url.length +
+    4 + hdrPkt.length +
+    4 + bodyBytes.length
+
+  const out = new Uint8Array(total)
+  const view = new DataView(out.buffer)
+  let o = 0
+
+  view.setUint16(o, addr.length, true); o += 2
+  out.set(addr, o); o += addr.length
+  view.setUint16(o, cport, true); o += 2
+  view.setUint16(o, sport, true); o += 2
+  out[o++] = method.length
+  out.set(method, o); o += method.length
+  out[o++] = proto.length
+  out.set(proto, o); o += proto.length
+  view.setUint32(o, url.length, true); o += 4
+  out.set(url, o); o += url.length
+  view.setUint32(o, hdrPkt.length, true); o += 4
+  out.set(hdrPkt, o); o += hdrPkt.length
+  view.setUint32(o, bodyBytes.length, true); o += 4
+  out.set(bodyBytes, o)
+
+  return out
 }

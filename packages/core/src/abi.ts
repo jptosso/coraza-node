@@ -57,6 +57,7 @@ export interface CorazaExports {
     protoPtr: number,
     protoLen: number,
   ): number
+  tx_process_request_bundle(id: number, bundlePtr: number, bundleLen: number): number
   tx_process_response_body(id: number, bodyPtr: number, bodyLen: number): number
   tx_append_response_body(id: number, chunkPtr: number, chunkLen: number): number
   tx_process_response_body_finish(id: number): number

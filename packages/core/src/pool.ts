@@ -152,6 +152,15 @@ export class WorkerTransaction {
     return interrupted
   }
 
+  /** Fused request phase — one worker round-trip instead of 2-5. */
+  async processRequestBundle(
+    req: RequestInfo,
+    body: Uint8Array | string | undefined,
+  ): Promise<boolean> {
+    const { interrupted } = await this.#proc('requestBundle', { req, body })
+    return interrupted
+  }
+
   async processRequestBody(body?: Uint8Array | string): Promise<boolean> {
     const { interrupted } = await this.#proc('requestBody', body)
     return interrupted
@@ -218,7 +227,7 @@ export class WorkerTransaction {
   }
 
   async #proc(
-    op: 'request' | 'requestBody' | 'response' | 'responseBody' | 'logging',
+    op: 'request' | 'requestBundle' | 'requestBody' | 'response' | 'responseBody' | 'logging',
     args: unknown,
   ): Promise<{ interrupted: boolean }> {
     const r = await callSlot<{ interrupted?: boolean }>(this.#slot, {
