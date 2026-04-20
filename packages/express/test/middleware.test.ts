@@ -327,7 +327,8 @@ describe('@coraza/express', () => {
       end: vi.fn(),
     } as unknown as express.Response
     const next = vi.fn()
-    mw(fakeReq, fakeRes, next)
+    // Middleware is now async — await it so state is settled.
+    await mw(fakeReq, fakeRes, next)
     expect(next).toHaveBeenCalledOnce()
     const tx = [...state.txs.values()][0]!
     expect(tx.headers).toEqual(

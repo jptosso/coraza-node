@@ -1,24 +1,39 @@
 // @coraza/express — Express middleware wrapping @coraza/core.
 //
-// Usage:
+// Usage (single WAF, simplest):
 //
 //   import { coraza } from '@coraza/express'
 //   import { createWAF } from '@coraza/core'
-//   import { recommended } from '@coraza/coreruleset'
-//
-//   const waf = await createWAF({ rules: recommended(), mode: 'block' })
+//   const waf = await createWAF({ rules, mode: 'block' })
 //   app.use(coraza({ waf }))
+//
+// Usage (WAFPool, multi-core scaling):
+//
+//   import { createWAFPool } from '@coraza/core'
+//   const pool = await createWAFPool({ rules, size: os.availableParallelism() })
+//   app.use(coraza({ waf: pool }))
 //
 // Logging: Express has no built-in logger. If the request carries `req.log`
 // (pino-http convention) we prefer it; otherwise we use the WAF's logger.
 
-import type { WAF, Interruption, Logger, Transaction, SkipOptions } from '@coraza/core'
+import type {
+  WAF,
+  WAFPool,
+  Transaction,
+  Interruption,
+  Logger,
+  SkipOptions,
+} from '@coraza/core'
 import { buildSkipPredicate, pathOf } from '@coraza/core'
 import type { Request, RequestHandler, Response } from 'express'
 
 export interface CorazaExpressOptions {
-  /** The WAF created via @coraza/core's createWAF. */
-  waf: WAF
+  /**
+   * A `WAF` (single instance, sync) or a `WAFPool` (worker_threads, async).
+   * Pools scale linearly up to CPU count with a small latency overhead —
+   * prefer them under production load. See @coraza/core for construction.
+   */
+  waf: WAF | WAFPool
   /**
    * Override how a block decision is turned into an HTTP response.
    * Default: sets status + plain-text body with the interruption's rule id.
@@ -47,15 +62,19 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
   const { waf, onBlock = defaultBlock, inspectResponse = false } = options
   const shouldSkip = options.skip === false ? () => false : buildSkipPredicate(options.skip)
 
-  return function corazaMiddleware(req, res, next) {
+  // `waf` is either a sync WAF or an async WAFPool. Both expose the same
+  // surface (newTransaction / Transaction has the same method names). We
+  // `await` every call so the middleware works against either.
+  return async function corazaMiddleware(req, res, next) {
     if (shouldSkip(pathOf(req.originalUrl || req.url))) {
       next()
       return
     }
     const log = pickLogger(req as ReqWithLog, waf.logger)
-    let tx
+
+    let tx: AnyTransaction
     try {
-      tx = waf.newTransaction()
+      tx = await waf.newTransaction()
     } catch (err) {
       log.error('coraza: newTransaction failed', { err: (err as Error).message })
       next()
@@ -63,21 +82,19 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     }
 
     res.once('close', () => {
-      try {
-        tx.processLogging()
-      } finally {
-        tx.close()
-      }
+      // Fire-and-forget — don't block response teardown.
+      void Promise.resolve(tx.processLogging())
+        .catch(() => {})
+        .finally(() => tx.close())
     })
 
-    // Cheapest possible skip — SecRuleEngine Off means we don't do any work.
-    if (tx.isRuleEngineOff()) {
-      next()
-      return
-    }
-
     try {
-      const requestInterrupt = tx.processRequest({
+      if (await tx.isRuleEngineOff()) {
+        next()
+        return
+      }
+
+      const interrupted = await tx.processRequest({
         method: req.method,
         url: req.originalUrl || req.url,
         protocol: `HTTP/${req.httpVersion}`,
@@ -86,19 +103,30 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
         remotePort: req.socket.remotePort ?? 0,
         serverPort: req.socket.localPort ?? 0,
       })
-      if (requestInterrupt) {
-        return emitBlock(tx.interruption(), req, res, onBlock, log)
+      if (interrupted) {
+        return emitBlock(await tx.interruption(), req, res, onBlock, log)
       }
 
-      if (tx.isRequestBodyAccessible()) {
-        const bodyBuf = extractBody(req)
-        if (bodyBuf && tx.processRequestBody(bodyBuf)) {
-          return emitBlock(tx.interruption(), req, res, onBlock, log)
+      const bodyAccessible = await tx.isRequestBodyAccessible()
+      const bodyBuf = bodyAccessible ? extractBody(req) : undefined
+      if (bodyBuf) {
+        const bodyInterrupted = await tx.processRequestBody(bodyBuf)
+        if (bodyInterrupted) {
+          return emitBlock(await tx.interruption(), req, res, onBlock, log)
         }
       }
 
       if (inspectResponse) {
-        hookResponse(tx, res, (it) => emitBlock(it, req, res, onBlock, log), log)
+        // Response hooks patch res.writeHead / res.end synchronously. They
+        // only work with the sync `WAF` path — a pool's async methods can't
+        // block mid-write. Skip quietly under pools; log once so users know.
+        if (isSyncTx(tx)) {
+          hookResponse(tx, res, (it) => emitBlock(it, req, res, onBlock, log), log)
+        } else {
+          log.warn(
+            'coraza: inspectResponse=true is a no-op when using WAFPool; use a single WAF or drop response inspection',
+          )
+        }
       }
 
       next()
@@ -108,6 +136,11 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     }
   }
 }
+
+// A union of Transaction (sync) and WorkerTransaction (async) — both have
+// the same method names; differing return types get uniformly awaited.
+type AnyTransaction = Awaited<ReturnType<(WAF | WAFPool)['newTransaction']>>
+
 
 export function defaultBlock(interruption: Interruption, _req: Request, res: Response): void {
   if (res.headersSent) return
@@ -134,17 +167,21 @@ function emitBlock(
   onBlock(interruption, req, res)
 }
 
-function* headersOf(
+function headersOf(
   h: Record<string, string | string[] | undefined>,
-): Iterable<[string, string]> {
+): [string, string][] {
+  // Must return a concrete array (not a generator) so the WAFPool path can
+  // structured-clone it across the MessagePort.
+  const out: [string, string][] = []
   for (const k in h) {
     const v = h[k]
     if (Array.isArray(v)) {
-      for (const item of v) yield [k, item]
+      for (const item of v) out.push([k, item])
     } else if (v !== undefined) {
-      yield [k, v]
+      out.push([k, v])
     }
   }
+  return out
 }
 
 function extractBody(req: Request): Uint8Array | undefined {
@@ -159,6 +196,19 @@ function extractBody(req: Request): Uint8Array | undefined {
   } catch {
     return undefined
   }
+}
+
+// A Transaction (sync) vs a WorkerTransaction (async) can be distinguished
+// by checking whether processRequest returned a Promise. Instead of that
+// (requires running a call), we use a structural check: sync txs have
+// non-async method signatures but at runtime they share. We tag via a
+// symbol during newTransaction — simpler: peek the return type of
+// `isRuleEngineOff()` by calling it and checking for a Promise. Cheapest:
+// just check if `close` returns a Promise.
+function isSyncTx(tx: AnyTransaction): tx is Transaction {
+  // WorkerTransaction methods are defined with `async`; their prototype's
+  // constructor is 'AsyncFunction'. Transaction methods are plain.
+  return (tx.close as { constructor: { name: string } }).constructor.name !== 'AsyncFunction'
 }
 
 function hookResponse(
@@ -209,7 +259,7 @@ function hookResponse(
   }) as typeof res.end
 }
 
-function headersFromNodeRes(res: Response): Iterable<[string, string]> {
+function headersFromNodeRes(res: Response): [string, string][] {
   const out: [string, string][] = []
   for (const name of res.getHeaderNames()) {
     const v = res.getHeader(name)!
