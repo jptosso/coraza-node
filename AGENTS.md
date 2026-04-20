@@ -266,12 +266,71 @@ check, add a Go test.
 
 ## Release flow
 
-- Every change that affects published packages gets a changeset
-  (`pnpm changeset`).
-- `main` is auto-published by the release workflow.
-- `@coraza/core` and `@coraza/coreruleset` version independently.
-- The nightly `upstream-bump.yml` workflow detects new Coraza / CRS releases
-  and opens a PR with the rebuilt WASM + changesets.
+Releases are Changesets-driven. You — human or AI agent — are responsible
+for declaring the bump type in the same PR as the code change. CI
+enforces it.
+
+### What you MUST do per PR
+
+1. If the PR touches `packages/*/src/**`, `packages/*/package.json`, or
+   `packages/*/tsup.config.ts`, run `pnpm changeset` locally and commit
+   the generated `.changeset/*.md` file.
+2. Pick the bump per package:
+   - **patch** — bug fix with no public API change.
+   - **minor** — new option, new adapter API, new behavior,
+     security-impacting change that users want to see in the
+     changelog (even if logically "a fix").
+   - **major** — reserved. Pre-1.0 we use minor for everything that
+     would otherwise be major; we exit 0.x by tagging `1.0.0` when
+     the API surface is genuinely stable.
+3. If the change is a pure internal refactor that legitimately should
+   not release, commit an **empty changeset** (`pnpm changeset`, press
+   Return without selecting any package) so intent is explicit. Or
+   add the `skip-changeset` label if justified in the PR description.
+
+### What CI enforces
+
+- `changeset-check.yml` fails the PR if publishable code changed but no
+  new `.changeset/*.md` file is present.
+- `ci.yml` runs typecheck + build + unit tests + coverage gates + E2E
+  per adapter on every PR.
+- `release.yml` runs typecheck + build + unit tests on push-to-main
+  *before* calling the Changesets action. A broken merge to `main` will
+  block publish; it cannot accidentally escape to npm.
+
+### What the workflows do
+
+- `release.yml` — on push-to-main: if pending changesets exist, maintain
+  a "Version Packages" PR that aggregates them. Merging that PR bumps
+  versions, cascades internal-dependency bumps (see below), tags, and
+  publishes to npm.
+- `docs.yml` — on push-to-main: if anything under `docs/**` changed,
+  republish the static site to GitHub Pages. No manual step.
+- `upstream-bump.yml` — nightly: poll coraza + coraza-coreruleset
+  releases, rebuild WASM, open a PR with the bump + a changeset. The
+  maintainer (or agent) reviews and merges.
+
+### Cross-package version cascading
+
+`.changeset/config.json` sets `updateInternalDependencies: "minor"`.
+That means: a minor bump to `@coraza/core` also minor-bumps every
+adapter (`@coraza/express`, `@coraza/fastify`, `@coraza/next`,
+`@coraza/nestjs`) because they peer-depend on it. You do NOT need to
+write four changesets — one on core is enough.
+
+`@coraza/coreruleset` and `@coraza/core` otherwise version
+**independently**. CRS bumps don't cascade to adapters, and vice versa.
+
+### Do not
+
+- Do not run `pnpm publish` manually. Everything goes through the
+  release PR flow.
+- Do not commit a `.changeset/*.md` that claims a bump type that
+  contradicts the code (e.g. a breaking API change marked `patch`). The
+  audit trail is the changelog itself — keep it honest.
+- Do not bypass `changeset-check.yml` without a tracked reason. The
+  `skip-changeset` label exists for docs-only / workflow-only PRs that
+  somehow touched `packages/` (rare; usually means the PR is mis-scoped).
 
 ## Known issues
 

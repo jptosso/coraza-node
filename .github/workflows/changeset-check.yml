@@ -1,0 +1,80 @@
+name: Changeset check
+
+# Guardrail: every PR that touches publishable package code must include a
+# changeset, so intent ("this is a minor bump") is declared in the same PR
+# as the code. Empty changesets (no packages listed) are accepted for
+# internal refactors that don't warrant a release.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Changeset present
+    runs-on: ubuntu-latest
+    # Bot-authored PRs (changesets "Version Packages", upstream-bump,
+    # dependabot) manage their own changesets.
+    if: |
+      github.event.pull_request.user.login != 'github-actions[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-changeset')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide if a changeset is required
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Ensure both SHAs are present locally.
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" || true
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || git diff --name-only "$HEAD_SHA^" "$HEAD_SHA")
+
+          # Consider src/, package.json, and tsup.config.ts the "publishable
+          # surface". Tests, READMEs, and vitest configs don't ship.
+          if echo "$changed" | grep -Eq '^packages/[^/]+/(src/|package\.json$|tsup\.config\.ts$)'; then
+            # Examples and private workspace packages are exempt.
+            pub=$(echo "$changed" | grep -E '^packages/[^/]+/(src/|package\.json$|tsup\.config\.ts$)' || true)
+            if [ -n "$pub" ]; then
+              echo "required=true" >> "$GITHUB_OUTPUT"
+              echo "Publishable changes detected:"
+              echo "$pub"
+              exit 0
+            fi
+          fi
+          echo "required=false" >> "$GITHUB_OUTPUT"
+
+      - name: Verify a changeset exists
+        if: steps.decide.outputs.required == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          added=$(git diff --name-only --diff-filter=A "$BASE_SHA" "$HEAD_SHA" || true)
+          if echo "$added" | grep -Eq '^\.changeset/[^/]+\.md$' && \
+             ! echo "$added" | grep -Eq '^\.changeset/README\.md$'; then
+            echo "Changeset found."
+            exit 0
+          fi
+          cat <<'EOF' >&2
+          ::error::This PR changes publishable package code but ships no changeset.
+
+          Run locally:
+            pnpm changeset
+
+          Pick the bump type per package:
+            - patch  bug fix, internal-only change
+            - minor  new API / new option / behavior change
+            - major  breaking change (pre-1.0: reserved)
+
+          For an internal refactor that genuinely should not release,
+          create an empty changeset (select no packages) so intent is
+          explicit, or add the 'skip-changeset' label to this PR.
+          EOF
+          exit 1
