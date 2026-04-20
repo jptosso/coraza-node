@@ -1,11 +1,25 @@
 //go:build tinygo || wasm
 // +build tinygo wasm
 
-// Override Coraza's built-in `rx` operator with one that forwards every
-// compile/match call to the JS host. V8's Irregexp is JIT-compiled and
-// significantly faster than Go's regexp inside a WASM runtime. If the
-// host reports it cannot compile a pattern (returns 0), we fall back to
-// Go's stdlib so CRS still works.
+// Override Coraza's built-in `rx` operator with one that:
+//
+//   1. Runs a cheap compile-time-extracted prefilter (minimum match length
+//      + required-literal check) to skip regex evaluation when the input
+//      clearly can't match. Ported from coraza main's
+//      internal/operators/rxprefilter.go.
+//
+//   2. For inputs that pass the prefilter, forwards to V8's RegExp via
+//      a WASM host import (env.rx_match). V8's Irregexp JIT beats Go's
+//      stdlib regex running inside WASM.
+//
+//   3. If a pattern is something V8 can't parse (atomic groups,
+//      possessive quantifiers, ignore-whitespace, etc.), falls back to
+//      Go's regexp.Compile and runs the match in-WASM.
+//
+// The prefilter is the single biggest win on benign traffic: it's a
+// required-condition check built from the regex AST at compile time,
+// costing an `strings.Contains` or Wu-Manber scan per evaluation vs
+// running the full Irregexp / Go-regex state machine.
 
 package main
 
@@ -27,13 +41,22 @@ func hostRxMatch(handle, inputPtr, inputLen int32) int32
 func hostRxFree(handle int32)
 
 type hostRx struct {
-	handle   int32              // > 0 when host compiled it
-	fallback *regexp.Regexp      // non-nil when we fall back to Go
+	handle    int32              // > 0 when host compiled it
+	fallback  *regexp.Regexp      // non-nil when we fall back to Go
+	minLen    int                 // minimum input length that could match
+	prefilter func(string) bool   // required-literal prefilter, nil if none
 }
 
 func newHostRX(options plugintypes.OperatorOptions) (plugintypes.Operator, error) {
 	// Matches wasilibs' `(?sm)` prefix: CRS patterns assume dotall+multiline.
 	pattern := "(?sm)" + options.Arguments
+
+	// Build the cheap prefilter *before* trying either backend. Even if
+	// host-compile or Go-compile fails later, this tells us the minimum
+	// input length needed for any match. It's safe to feed the raw
+	// pattern — failure paths return conservative defaults.
+	minL := minMatchLength(pattern)
+	pre := prefilterFunc(pattern)
 
 	patBytes := []byte(pattern)
 	var patPtr int32
@@ -42,10 +65,7 @@ func newHostRX(options plugintypes.OperatorOptions) (plugintypes.Operator, error
 	}
 	handle := hostRxCompile(patPtr, int32(len(patBytes)))
 	if handle > 0 {
-		// Pin the pattern bytes so GC doesn't reclaim before compile returns.
-		// Compile already copied on the host side, so we can drop after.
-		_ = patBytes
-		return &hostRx{handle: handle}, nil
+		return &hostRx{handle: handle, minLen: minL, prefilter: pre}, nil
 	}
 
 	// Host rejected (usually PCRE-only syntax). Fall back to Go regex.
@@ -53,10 +73,20 @@ func newHostRX(options plugintypes.OperatorOptions) (plugintypes.Operator, error
 	if err != nil {
 		return nil, err
 	}
-	return &hostRx{fallback: re}, nil
+	return &hostRx{fallback: re, minLen: minL, prefilter: pre}, nil
 }
 
 func (o *hostRx) Evaluate(tx plugintypes.TransactionState, value string) bool {
+	// Prefilter #1: input too short to match the minimum-length requirement.
+	if o.minLen > 0 && len(value) < o.minLen {
+		return false
+	}
+	// Prefilter #2: required literals absent.
+	if o.prefilter != nil && !o.prefilter(value) {
+		return false
+	}
+
+	// Regex engine (host-first, Go fallback).
 	if o.handle > 0 {
 		valBytes := []byte(value)
 		var valPtr int32
@@ -67,14 +97,9 @@ func (o *hostRx) Evaluate(tx plugintypes.TransactionState, value string) bool {
 		if !matched {
 			return false
 		}
-		// CRS captures are set via tx.CaptureField. For a minimum-viable
-		// host-rx we only report the match; captures fall back to Go if
-		// Capturing() is true. (This is a known trade-off; many CRS rules
-		// don't capture, so the fast path still wins.)
 		if tx.Capturing() {
-			// Fallback to Go to fill captures.
 			if o.fallback == nil {
-				return true // can't produce captures; report match
+				return true
 			}
 			m := o.fallback.FindStringSubmatch(value)
 			for i, c := range m {
