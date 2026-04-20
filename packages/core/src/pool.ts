@@ -77,7 +77,41 @@ export class WAFPool {
       slots.map((slot) => slot.ready.then(() => callSlot<void>(slot, { type: 'init', config }))),
     )
 
-    return new WAFPool(slots, logger, mode)
+    const pool = new WAFPool(slots, logger, mode)
+
+    // Pre-warm: send a synthetic request through every worker so V8 JITs
+    // the WASM hot paths before real traffic arrives. Cuts first-request
+    // p99 meaningfully (the first real request otherwise pays JIT cost).
+    // Best-effort — any worker that rejects just logs and moves on.
+    await Promise.all(
+      slots.map(async (_slot, i) => {
+        try {
+          const tx = await pool.newTransaction()
+          try {
+            await tx.processRequest({
+              method: 'GET',
+              url: '/__coraza_prewarm',
+              protocol: 'HTTP/1.1',
+              headers: [['host', 'prewarm.local']],
+              remoteAddr: '127.0.0.1',
+              remotePort: 0,
+              serverPort: 0,
+            })
+            // Also trigger the body phase so phase-2 rules get JIT-compiled.
+            await tx.processRequestBody('prewarm-body')
+          } finally {
+            await tx.close()
+          }
+        } catch (err) {
+          logger.warn('coraza pool: prewarm failed on worker', {
+            worker: i,
+            err: (err as Error).message,
+          })
+        }
+      }),
+    )
+
+    return pool
   }
 
   /**
