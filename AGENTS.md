@@ -263,9 +263,26 @@ check, add a Go test.
 
 ## Release flow
 
-Releases are Changesets-driven. You — human or AI agent — are responsible
-for declaring the bump type in the same PR as the code change. CI
-enforces it.
+### Branches
+
+- **`develop`** — integration branch. Every PR lands here first. CI
+  runs (typecheck + build + unit + E2E) and the selective filter
+  re-tests only the affected packages and their dependents. No npm
+  publish ever happens from `develop`.
+- **`main`** — stable line. Published to npm. Merges into `main` only
+  after `develop` is green and a maintainer opens a PR from develop
+  → main.
+
+### The very first release
+
+0.0.0 → 0.1.0 is cut by hand: bump the `version` field in every
+publishable `packages/*/package.json`, run `pnpm -r build`, run
+`pnpm -r publish --access public` against an authenticated npm scope.
+No changeset needed — the initial release isn't a "change".
+
+### Every release after that
+
+Changesets-driven on `main`:
 
 ### What you MUST do per PR
 

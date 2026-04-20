@@ -12,9 +12,9 @@ name: Release
 
 on:
   push:
-    # `develop` is the integration branch — publishes pre-release tags
-    # (0.x.y-alpha.N) when we're in pre mode. `main` is the stable line.
-    branches: [main, develop]
+    # Only `main` publishes to npm. `develop` is the integration branch
+    # and runs CI only — never release.
+    branches: [main]
 
 concurrency: release
 
