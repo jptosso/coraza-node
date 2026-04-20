@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { Abi, type CorazaExports } from './abi.js'
 import { patchInitialMemory } from './wasmPatch.js'
 import { createMinimalWasi, useNativeWasi } from './wasi.js'
+import { createHostRegex } from './hostRegex.js'
 import type { Logger } from './types.js'
 
 // CRS's regex compilation needs ~100 MiB of linear memory up front. TinyGo
@@ -55,6 +56,12 @@ export async function instantiate(
     env: {},
   })
 
+  // Shared host-regex state for the lifetime of this WASM instance.
+  // Coraza calls `rx_compile` at WAF init for every CRS regex (~1300),
+  // then `rx_match` on every request. V8's Irregexp JIT beats Go's regex
+  // running inside WASM by a lot.
+  const hostRx = createHostRegex()
+
   const envImports = {
     log(level: number, ptr: number, len: number) {
       // `bytes()` pulled from the abi below once bound; we use a closure trick:
@@ -65,6 +72,22 @@ export async function instantiate(
     },
     now_millis(): bigint {
       return BigInt(Date.now())
+    },
+
+    // Host-regex imports. Return 0 on compile failure so the Go side can
+    // fall back to stdlib regex for PCRE features JS can't handle.
+    rx_compile(patPtr: number, patLen: number): number {
+      if (!abi) return 0
+      const pat = abi.readString(patPtr, patLen)
+      return hostRx.compile(pat)
+    },
+    rx_match(handle: number, inputPtr: number, inputLen: number): number {
+      if (!abi) return 0
+      const input = abi.readString(inputPtr, inputLen)
+      return hostRx.match(handle, input) ? 1 : 0
+    },
+    rx_free(handle: number): void {
+      hostRx.free(handle)
     },
   }
 

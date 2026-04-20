@@ -25,6 +25,14 @@ import (
 // and benchmarks enable it by default for realistic numbers; WASM builds
 // stick with Go stdlib regex.
 
+// Register the host-backed `rx` operator so every CRS SecRule that uses
+// `@rx ...` calls into V8's RegExp via a WASM host import instead of
+// running Go's stdlib regex inside the WASM. Patterns the host can't
+// compile fall back to Go transparently.
+func init() {
+	registerHostRX()
+}
+
 const (
 	abiMajor = 1
 	abiMinor = 0
