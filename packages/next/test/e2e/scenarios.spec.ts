@@ -24,14 +24,8 @@ test.describe('@coraza/next E2E', () => {
     expect([200, 413, 403].includes(res.status())).toBe(true)
   })
 
-  test('5. custom block response override works', async () => {
-    test.skip(true, 'Custom onBlock example route not wired in v1')
-  })
-
-  test('6. detect-only mode logs but does not block', async () => {
-    test.skip(
-      process.env.MODE !== 'detect',
-      'Detect-only scenario runs in a separate CI job (MODE=detect)',
-    )
-  })
 })
+
+// Not in this E2E: custom onBlock override (unit-tested in test/middleware.test.ts)
+// and detect-mode passthrough (a Coraza-internal toggle, not adapter logic —
+// verified in packages/core/test/wafCreate.test.ts).

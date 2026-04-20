@@ -1,3 +1,11 @@
+/**
+ * CorazaGuard — a Nest `CanActivate` that runs every request through a WAF
+ * (or `WAFPool`) via the shared `processRequestBundle` atomic call.
+ *
+ * Blocks become `HttpException` (override with `onBlock` in `CorazaModule`).
+ * Fails closed on internal WAF errors unless `onWAFError: 'allow'`.
+ * Respects the usual `skip` static-asset bypass and `isRuleEngineOff()`.
+ */
 import {
   CanActivate,
   ExecutionContext,

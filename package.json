@@ -27,7 +27,8 @@
     "version-packages": "changeset version",
     "release": "turbo run build && changeset publish",
     "bench": "pnpm -F @coraza/bench bench",
-    "k6": "pnpm -F @coraza/bench k6"
+    "k6": "pnpm -F @coraza/bench k6",
+    "docs:dev": "pnpm dlx serve@14 docs/site -l 4321"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.9",

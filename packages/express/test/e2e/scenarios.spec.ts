@@ -7,7 +7,7 @@ test.describe('@coraza/express E2E', () => {
   test('1. benign request passes through (200)', async ({ request }) => {
     const res = await request.get('/')
     expect(res.status()).toBe(200)
-    expect(await res.json()).toEqual({ ok: true })
+    expect(await res.json()).toMatchObject({ ok: true, name: 'express' })
   })
 
   test('2. SQLi in query string is blocked', async ({ request }) => {
@@ -28,23 +28,8 @@ test.describe('@coraza/express E2E', () => {
     expect([200, 413, 403].includes(res.status())).toBe(true)
   })
 
-  test('5. custom block response override works', async ({ request }) => {
-    // This test assumes a route on the example that exercises a custom
-    // onBlock. In the default example there isn't one; it's documented as
-    // a follow-up once per-route onBlock is wired. Skipping for now.
-    test.skip(true, 'Custom onBlock example route not wired in v1')
-    void request
-  })
-
-  test('6. detect-only mode logs but does not block', async ({ request, baseURL }) => {
-    // Spin up a separate run in detect mode and verify a would-block request
-    // returns 200. In CI this is covered by a second webServer invocation;
-    // here we assert the assumption with a direct fetch.
-    const target = baseURL ?? 'http://localhost:3001'
-    void target
-    test.skip(
-      process.env.MODE !== 'detect',
-      'Detect-only scenario runs in a separate CI job (MODE=detect)',
-    )
-  })
 })
+
+// Not in this E2E: custom onBlock override (unit-tested in test/middleware.test.ts)
+// and detect-mode passthrough (a Coraza-internal toggle, not adapter logic —
+// verified in packages/core/test/wafCreate.test.ts).
