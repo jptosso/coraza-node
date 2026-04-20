@@ -94,7 +94,11 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
         return
       }
 
-      const interrupted = await tx.processRequest({
+      // Fused path: pack connection+URI+headers+body into one WASM call.
+      // Express's body-parser middleware has already buffered req.body by
+      // the time we run, so we have everything we need. This saves 4-8
+      // MessagePort round-trips under WAFPool.
+      const reqInfo: RequestInfo = {
         method: req.method,
         url: req.originalUrl || req.url,
         protocol: `HTTP/${req.httpVersion}`,
@@ -102,18 +106,11 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
         remoteAddr: req.ip ?? '',
         remotePort: req.socket.remotePort ?? 0,
         serverPort: req.socket.localPort ?? 0,
-      })
+      }
+      const bodyBuf = extractBody(req)
+      const interrupted = await tx.processRequestBundle(reqInfo, bodyBuf)
       if (interrupted) {
         return emitBlock(await tx.interruption(), req, res, onBlock, log)
-      }
-
-      const bodyAccessible = await tx.isRequestBodyAccessible()
-      const bodyBuf = bodyAccessible ? extractBody(req) : undefined
-      if (bodyBuf) {
-        const bodyInterrupted = await tx.processRequestBody(bodyBuf)
-        if (bodyInterrupted) {
-          return emitBlock(await tx.interruption(), req, res, onBlock, log)
-        }
       }
 
       if (inspectResponse) {
