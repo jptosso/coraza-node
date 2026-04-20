@@ -25,7 +25,7 @@ jobs:
       coraza_ver: ${{ steps.detect.outputs.coraza_ver }}
       crs_ver: ${{ steps.detect.outputs.crs_ver }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
@@ -67,8 +67,8 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: '1.23'
 
@@ -87,8 +87,8 @@ jobs:
         run: make -C wasm wasm-docker
 
       # Version is read from package.json's `packageManager` field.
-      - uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -110,7 +110,7 @@ jobs:
           EOF
 
       - name: Open PR
-        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f # v7.0.5
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: upstream-bump/coraza-${{ needs.check-upstream.outputs.coraza_ver }}-crs-${{ needs.check-upstream.outputs.crs_ver }}
           commit-message: 'chore: bump coraza=${{ needs.check-upstream.outputs.coraza_ver }}, crs=${{ needs.check-upstream.outputs.crs_ver }}'
