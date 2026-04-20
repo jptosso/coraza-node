@@ -7,7 +7,14 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common'
-import type { WAF, Interruption, Transaction, SkipOptions } from '@coraza/core'
+import type {
+  WAF,
+  WAFPool,
+  Transaction,
+  WorkerTransaction,
+  Interruption,
+  SkipOptions,
+} from '@coraza/core'
 import { buildSkipPredicate, pathOf } from '@coraza/core'
 import { CORAZA_WAF, CORAZA_OPTIONS } from './tokens.js'
 
@@ -24,49 +31,57 @@ interface HttpReq {
   socket?: { remotePort?: number; localPort?: number }
   raw?: { httpVersion?: string }
 }
-interface HttpRes {
-  headersSent?: boolean
-  sent?: boolean
-  statusCode?: number
-  setHeader?(k: string, v: string): void
-  end?(body?: string): void
-}
 
 const encoder = new TextEncoder()
+type AnyTx = Transaction | WorkerTransaction
+type AnyWAF = WAF | WAFPool
 
 @Injectable()
 export class CorazaGuard implements CanActivate {
   private readonly logger = new Logger('CorazaGuard')
   private readonly shouldSkip: (path: string) => boolean
+  private readonly onWAFError: 'allow' | 'block'
 
   constructor(
-    @Inject(CORAZA_WAF) private readonly waf: WAF,
-    @Inject(CORAZA_OPTIONS) opts: { skip?: SkipOptions | false } = {},
+    @Inject(CORAZA_WAF) private readonly waf: AnyWAF,
+    @Inject(CORAZA_OPTIONS)
+    opts: {
+      skip?: SkipOptions | false
+      onWAFError?: 'allow' | 'block'
+    } = {},
   ) {
     this.shouldSkip = opts.skip === false ? () => false : buildSkipPredicate(opts.skip)
+    this.onWAFError = opts.onWAFError ?? 'block'
   }
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const http = ctx.switchToHttp()
     const req = http.getRequest<HttpReq>()
-    const res = http.getResponse<HttpRes>()
 
     if (this.shouldSkip(pathOf(req.originalUrl || req.url || '/'))) return true
 
-    const tx = this.waf.newTransaction()
-
-    // Record tx on the request so an interceptor could inspect later.
-    ;(req as HttpReq & { _corazaTx?: Transaction })._corazaTx = tx
-
-    let interruption: Interruption | null = null
-    if (tx.isRuleEngineOff()) {
-      tx.processLogging()
-      tx.close()
+    let tx: AnyTx
+    try {
+      tx = await this.waf.newTransaction()
+    } catch (err) {
+      this.logger.error(`newTransaction failed: ${(err as Error).message}`)
+      if (this.onWAFError === 'block') {
+        throw new HttpException('WAF unavailable', 503)
+      }
       return true
     }
+    ;(req as HttpReq & { _corazaTx?: AnyTx })._corazaTx = tx
+
+    let interruption: Interruption | null = null
     try {
-      if (
-        tx.processRequest({
+      if (await tx.isRuleEngineOff()) return true
+
+      // Phases 1+2 run atomically via the fused bundle call. The prior
+      // split-phase flow silently missed 60% of GET-based attacks because
+      // CRS's anomaly evaluator at phase 2 never fired. See
+      // docs/security.md.
+      const interrupted = await tx.processRequestBundle(
+        {
           method: req.method,
           url: req.originalUrl || req.url || '/',
           protocol: `HTTP/${req.httpVersion ?? req.raw?.httpVersion ?? '1.1'}`,
@@ -74,23 +89,28 @@ export class CorazaGuard implements CanActivate {
           remoteAddr: req.ip ?? '',
           remotePort: req.socket?.remotePort ?? 0,
           serverPort: req.socket?.localPort ?? 0,
-        })
-      ) {
-        interruption = tx.interruption()
-      } else if (tx.isRequestBodyAccessible()) {
-        const body = serializeBody(req.body)
-        if (body && tx.processRequestBody(body)) {
-          interruption = tx.interruption()
-        }
-      }
+        },
+        serializeBody(req.body),
+      )
+      if (interrupted) interruption = await tx.interruption()
     } catch (err) {
       this.logger.error(`middleware error: ${(err as Error).message}`)
+      if (this.onWAFError === 'block') {
+        try {
+          await tx.processLogging()
+        } finally {
+          await tx.close()
+        }
+        throw new HttpException('WAF internal error', 503)
+      }
+      // onWAFError === 'allow' falls through to processLogging + close
+      // + return true below.
     } finally {
-      // NestJS guards run before the handler. We emit audit logs + close the
-      // transaction immediately (interceptor-driven response inspection is
-      // out of v1 scope).
-      tx.processLogging()
-      tx.close()
+      try {
+        await tx.processLogging()
+      } finally {
+        await tx.close()
+      }
     }
 
     if (interruption) {
@@ -106,17 +126,19 @@ export class CorazaGuard implements CanActivate {
   }
 }
 
-function* headersOf(
+function headersOf(
   h: Record<string, string | string[] | undefined>,
-): Iterable<[string, string]> {
+): [string, string][] {
+  const out: [string, string][] = []
   for (const [k, v] of Object.entries(h)) {
     if (v === undefined) continue
     if (Array.isArray(v)) {
-      for (const item of v) yield [k, item]
+      for (const item of v) out.push([k, item])
     } else {
-      yield [k, v]
+      out.push([k, v])
     }
   }
+  return out
 }
 
 function serializeBody(body: unknown): Uint8Array | undefined {
@@ -134,5 +156,4 @@ function serializeBody(body: unknown): Uint8Array | undefined {
   return undefined
 }
 
-// Re-exported for callers who want to throw the same shape manually.
 export { ForbiddenException }

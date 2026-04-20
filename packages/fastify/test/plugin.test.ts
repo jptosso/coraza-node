@@ -63,7 +63,11 @@ describe('@coraza/fastify', () => {
     await app.close()
   })
 
-  it('skips body phase when isRequestBodyAccessible is false', async () => {
+  it('runs body phase regardless of isRequestBodyAccessible (bundle always fires phase 2)', async () => {
+    // With batch-phases, phase 2 runs atomically with phase 1. See
+    // docs/security.md — the previous split-phase flow silently missed
+    // 60% of GET-based attacks because CRS's anomaly evaluator at phase 2
+    // never ran.
     const { app, state } = await appWith({
       onBody: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
     })
@@ -73,7 +77,7 @@ describe('@coraza/fastify', () => {
       url: '/echo',
       payload: { hi: 1 },
     })
-    expect(res.statusCode).toBe(200)
+    expect(res.statusCode).toBe(403)
     await app.close()
   })
 

@@ -78,22 +78,24 @@ describe('CorazaGuard', () => {
     expect(ok).toBe(true)
   })
 
-  it('skips body phase when isRequestBodyAccessible is false', async () => {
+  it('runs body phase regardless of isRequestBodyAccessible (bundle always fires phase 2)', async () => {
+    // Post-batch-phases: see docs/security.md.
     const { waf, state } = mockWAF('block', {
       onBody: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
     })
     state.reqBodyAccessible = false
     const guard = new CorazaGuard(waf)
-    const ok = await guard.canActivate(
-      ctx({
-        method: 'POST',
-        url: '/',
-        headers: {},
-        body: { hi: 1 },
-        socket: {},
-      }),
-    )
-    expect(ok).toBe(true)
+    await expect(
+      guard.canActivate(
+        ctx({
+          method: 'POST',
+          url: '/',
+          headers: {},
+          body: { hi: 1 },
+          socket: {},
+        }),
+      ),
+    ).rejects.toThrow(HttpException)
   })
 
   it('continues when WAF itself throws (fail-open)', async () => {

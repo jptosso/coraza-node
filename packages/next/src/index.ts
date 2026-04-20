@@ -11,42 +11,59 @@
 //
 //   const wafPromise = createWAF({ rules: recommended(), mode: 'block' })
 //   export const middleware = createCorazaMiddleware(wafPromise)
-//   export const config = { matcher: '/:path*' }
+//   export const config = { matcher: '/:path*', runtime: 'nodejs' }
 //
-// Logging: Next has no per-request logger. We use the WAF's logger.
+// Design notes:
+//   - Uses `processRequestBundle` so phases 1+2 run atomically. The prior
+//     sequential flow silently missed GET-based attacks (see
+//     docs/security.md).
+//   - Fails closed on any WAF error (default `onWAFError: 'block'`).
+//   - Logging: Next has no per-request logger; we use the WAF's.
 
-import type { WAF, Interruption, Logger, SkipOptions } from '@coraza/core'
+import type {
+  WAF,
+  WAFPool,
+  Interruption,
+  Logger,
+  SkipOptions,
+} from '@coraza/core'
 import { buildSkipPredicate } from '@coraza/core'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export interface CorazaNextOptions {
   onBlock?: (interruption: Interruption, req: NextRequest) => Response
   /**
-   * If true, also inspect the response. Next middleware runs BEFORE the
-   * route handler, so response inspection requires re-entering via a route
-   * handler wrapper — not exposed in v1. Default: false.
+   * If true, also inspect the response. Not implemented in v1 — Next
+   * middleware can't intercept the response stream easily without a
+   * route-handler wrapper.
    */
   inspectResponse?: boolean
   /** Bypass Coraza for static/media paths. Defaults skip /_next/static, etc. */
   skip?: SkipOptions | false
+  /**
+   * What to do if the WAF throws mid-request. Default 'block' (fail
+   * closed with 503). 'allow' is an opt-in availability-over-security
+   * knob; see docs/security.md before flipping it.
+   */
+  onWAFError?: 'allow' | 'block'
 }
 
-const encoder = new TextEncoder()
+type AnyWAF = WAF | WAFPool
 
 /**
- * Build a Next.js middleware. Accepts either a WAF or a promise of one so the
- * module's top-level await (unsupported in CJS) can be avoided.
+ * Build a Next.js middleware. Accepts either a WAF/WAFPool or a promise
+ * of one so the consuming `middleware.ts` doesn't need top-level await
+ * in CJS.
  */
 export function createCorazaMiddleware(
-  wafOrPromise: WAF | Promise<WAF>,
+  wafOrPromise: AnyWAF | Promise<AnyWAF>,
   options: CorazaNextOptions = {},
 ): (req: NextRequest) => Promise<Response> {
-  const { onBlock = defaultBlock, inspectResponse = false } = options
-  void inspectResponse
+  const { onBlock = defaultBlock, onWAFError = 'block' } = options
   const shouldSkip = options.skip === false ? () => false : buildSkipPredicate(options.skip)
 
-  let wafRef: WAF | null = null
-  const ensureWAF = async (): Promise<WAF> => {
+  let wafRef: AnyWAF | null = null
+  const ensureWAF = async (): Promise<AnyWAF> => {
     if (wafRef) return wafRef
     wafRef = await wafOrPromise
     return wafRef
@@ -57,37 +74,56 @@ export function createCorazaMiddleware(
     if (shouldSkip(url.pathname)) return NextResponse.next()
 
     const waf = await ensureWAF()
-    const tx = waf.newTransaction()
     const log = waf.logger
 
+    let tx
     try {
-      if (tx.isRuleEngineOff()) return NextResponse.next()
-      if (tx.processRequest({
-        method: req.method,
-        url: url.pathname + url.search,
-        protocol: 'HTTP/1.1',
-        headers: headersOf(req.headers),
-        remoteAddr: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '',
-      })) {
-        return handleBlock(tx.interruption(), req, onBlock, log)
-      }
+      tx = await waf.newTransaction()
+    } catch (err) {
+      log.error('coraza: newTransaction failed', { err: (err as Error).message })
+      return onWAFError === 'block'
+        ? onBlock(
+            { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable' },
+            req,
+          )
+        : NextResponse.next()
+    }
 
-      if (hasBody(req) && tx.isRequestBodyAccessible()) {
-        const buf = new Uint8Array(await req.arrayBuffer())
-        if (buf.length > 0 && tx.processRequestBody(buf)) {
-          return handleBlock(tx.interruption(), req, onBlock, log)
-        }
+    try {
+      if (await tx.isRuleEngineOff()) return NextResponse.next()
+
+      // Read the body up front (Next streams it); the bundle needs it
+      // to guarantee phase 2 runs.
+      const body = hasBody(req) ? new Uint8Array(await req.arrayBuffer()) : undefined
+
+      const interrupted = await tx.processRequestBundle(
+        {
+          method: req.method,
+          url: url.pathname + url.search,
+          protocol: 'HTTP/1.1',
+          headers: headersOf(req.headers),
+          remoteAddr: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '',
+        },
+        body,
+      )
+      if (interrupted) {
+        return handleBlock(await tx.interruption(), req, onBlock, log)
       }
 
       return NextResponse.next()
     } catch (err) {
       log.error('coraza: middleware error', { err: (err as Error).message })
-      return NextResponse.next()
+      return onWAFError === 'block'
+        ? onBlock(
+            { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error' },
+            req,
+          )
+        : NextResponse.next()
     } finally {
       try {
-        tx.processLogging()
+        await tx.processLogging()
       } finally {
-        tx.close()
+        await tx.close()
       }
     }
   }
@@ -118,8 +154,10 @@ function handleBlock(
   return onBlock(interruption, req)
 }
 
-function* headersOf(h: Headers): Iterable<[string, string]> {
-  for (const [k, v] of h.entries()) yield [k, v]
+function headersOf(h: Headers): [string, string][] {
+  const out: [string, string][] = []
+  for (const [k, v] of h.entries()) out.push([k, v])
+  return out
 }
 
 function hasBody(req: NextRequest): boolean {
@@ -129,9 +167,6 @@ function hasBody(req: NextRequest): boolean {
   if (len !== null) return Number(len) > 0
   return req.headers.has('content-type')
 }
-
-// Make encoder retained so tsup doesn't tree-shake it away in edge-case builds.
-void encoder
 
 export { NextResponse } from 'next/server'
 export type { NextRequest } from 'next/server'

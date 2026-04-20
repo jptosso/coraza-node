@@ -9,61 +9,127 @@
 //   const app = fastify()
 //   await app.register(coraza, { waf })
 //
-// Logging: Fastify ships Pino. We forward to `request.log` (scoped) for
-// per-request log lines and fall back to `fastify.log` for init-time.
+// Design notes:
+//   - Evaluates the full request (phases 1 + 2) in a single `preHandler`
+//     hook using `processRequestBundle`. preHandler runs after Fastify's
+//     body parser, so req.body is in hand. Running both phases together
+//     matches the batch-phases fix on @coraza/express — prior to that, a
+//     separate onRequest + preHandler sequence silently missed phase 2
+//     on body-less requests, bypassing CRS's anomaly-score rule 949110.
+//   - Fails closed on any WAF error (default `onWAFError: 'block'`).
+//     Matches docs/security.md's threat model.
+//   - Logging: Fastify ships Pino. We forward to `request.log` (scoped)
+//     for per-request log lines and fall back to `fastify.log` for
+//     init-time messages.
 
 import fp from 'fastify-plugin'
-import type { WAF, Interruption, Transaction, Logger, SkipOptions } from '@coraza/core'
+import type {
+  WAF,
+  WAFPool,
+  Transaction,
+  WorkerTransaction,
+  Interruption,
+  SkipOptions,
+} from '@coraza/core'
 import { buildSkipPredicate, pathOf } from '@coraza/core'
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 
 export interface CorazaFastifyOptions {
-  waf: WAF
-  onBlock?: (interruption: Interruption, req: FastifyRequest, reply: FastifyReply) => void | Promise<void>
+  /** Single WAF or a WAFPool for multi-core scaling. */
+  waf: WAF | WAFPool
+  onBlock?: (
+    interruption: Interruption,
+    req: FastifyRequest,
+    reply: FastifyReply,
+  ) => void | Promise<void>
+  /** Run phase 3+4 on the response. Default false; see @coraza/express docs. */
   inspectResponse?: boolean
   /** Bypass Coraza for static/media paths. See `SkipOptions`. */
   skip?: SkipOptions | false
+  /**
+   * What to do if the WAF throws mid-request.
+   *   'block' (default) — respond 503 (fail-closed). A crash in the WAF
+   *                       must not become a bypass.
+   *   'allow'           — pass through. Only for availability-critical
+   *                       setups; document why you flipped it.
+   */
+  onWAFError?: 'allow' | 'block'
 }
 
-const encoder = new TextEncoder()
 const TX_SYMBOL = Symbol('coraza.tx')
-
-type WithTx = FastifyRequest & { [TX_SYMBOL]?: Transaction }
+type AnyTx = Transaction | WorkerTransaction
+type WithTx = FastifyRequest & { [TX_SYMBOL]?: AnyTx }
 
 const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opts) => {
-  const { waf, onBlock = defaultBlock, inspectResponse = false } = opts
+  const {
+    waf,
+    onBlock = defaultBlock,
+    inspectResponse = false,
+    onWAFError = 'block',
+  } = opts
   const shouldSkip = opts.skip === false ? () => false : buildSkipPredicate(opts.skip)
 
   fastify.decorateRequest(TX_SYMBOL as unknown as string, null)
 
-  fastify.addHook('onRequest', async (req, reply) => {
+  // One fused preHandler — body parser has run, so req.body is populated
+  // (or explicitly empty for body-less verbs). Running phases 1+2 together
+  // ensures CRS's anomaly evaluator at phase 2 always fires.
+  fastify.addHook('preHandler', async (req, reply) => {
+    if (reply.sent) return
     if (shouldSkip(pathOf(req.url))) return
-    const tx = waf.newTransaction()
+
+    let tx: AnyTx
+    try {
+      tx = await waf.newTransaction()
+    } catch (err) {
+      ;(req.log ?? waf.logger).error(
+        `coraza: newTransaction failed: ${(err as Error).message}`,
+      )
+      if (onWAFError === 'block' && !reply.sent) {
+        await emitBlock(
+          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable' },
+          req,
+          reply,
+          onBlock,
+        )
+      }
+      return
+    }
     ;(req as WithTx)[TX_SYMBOL] = tx
 
-    // Short-circuit if the rule engine is off — no headers, no body, no response.
-    if (tx.isRuleEngineOff()) return
+    try {
+      if (await tx.isRuleEngineOff()) return
 
-    if (tx.processRequest({
-      method: req.method,
-      url: req.url,
-      protocol: `HTTP/${req.raw.httpVersion ?? '1.1'}`,
-      headers: headersOf(req.headers),
-      remoteAddr: req.ip,
-      remotePort: req.socket.remotePort ?? 0,
-      serverPort: req.socket.localPort ?? 0,
-    })) {
-      await doBlock(tx, req, reply, onBlock)
-    }
-  })
-
-  fastify.addHook('preHandler', async (req, reply) => {
-    const tx = (req as WithTx)[TX_SYMBOL]
-    if (!tx || reply.sent) return
-    if (!tx.isRequestBodyAccessible()) return
-    const body = serializeBody(req.body)
-    if (body && tx.processRequestBody(body)) {
-      await doBlock(tx, req, reply, onBlock)
+      const interrupted = await tx.processRequestBundle(
+        {
+          method: req.method,
+          url: req.url,
+          protocol: `HTTP/${req.raw.httpVersion ?? '1.1'}`,
+          headers: headersOf(req.headers),
+          remoteAddr: req.ip,
+          remotePort: req.socket.remotePort ?? 0,
+          serverPort: req.socket.localPort ?? 0,
+        },
+        serializeBody(req.body),
+      )
+      if (interrupted) {
+        const it = await tx.interruption()
+        if (it) {
+          await emitBlock(it, req, reply, onBlock)
+        }
+      }
+    } catch (err) {
+      ;(req.log ?? waf.logger).error(
+        `coraza: middleware error: ${(err as Error).message}`,
+      )
+      if (onWAFError === 'block' && !reply.sent) {
+        await emitBlock(
+          { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error' },
+          req,
+          reply,
+          onBlock,
+        )
+      }
     }
   })
 
@@ -72,21 +138,24 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
       const tx = (req as WithTx)[TX_SYMBOL]
       if (!tx) return payload
       try {
-        if (tx.processResponse({
+        const rHdrInterrupted = await tx.processResponse({
           status: reply.statusCode,
-          headers: headersOf(reply.getHeaders() as Record<string, string | string[]>),
+          headers: headersOf(
+            reply.getHeaders() as Record<string, string | string[]>,
+          ),
           protocol: 'HTTP/1.1',
-        })) {
-          const it = tx.interruption()
+        })
+        if (rHdrInterrupted) {
+          const it = await tx.interruption()
           if (it) {
             reply.code(it.status || 403)
             return `Request blocked by Coraza (rule ${it.ruleId})\n`
           }
         }
-        if (payload != null && tx.isResponseBodyProcessable()) {
+        if (payload != null && (await tx.isResponseBodyProcessable())) {
           const buf = payloadToBytes(payload)
-          if (buf && tx.processResponseBody(buf)) {
-            const it = tx.interruption()
+          if (buf && (await tx.processResponseBody(buf))) {
+            const it = await tx.interruption()
             if (it) {
               reply.code(it.status || 403)
               return `Request blocked by Coraza (rule ${it.ruleId})\n`
@@ -94,9 +163,11 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
           }
         }
       } catch (err) {
-        (req.log as Logger).error('coraza: response inspection failed', {
-          err: (err as Error).message,
-        })
+        ;(req.log ?? waf.logger).error(
+          `coraza: response inspection failed: ${(err as Error).message}`,
+        )
+        // Response phase errors don't turn into 503s — the response is
+        // already mid-flight and we'd double-write. Log and let it through.
       }
       return payload
     })
@@ -106,9 +177,9 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
     const tx = (req as WithTx)[TX_SYMBOL]
     if (!tx) return
     try {
-      tx.processLogging()
+      await tx.processLogging()
     } finally {
-      tx.close()
+      await tx.close()
     }
   })
 }
@@ -132,34 +203,34 @@ export function defaultBlock(
     .send(`Request blocked by Coraza (rule ${interruption.ruleId})\n`)
 }
 
-async function doBlock(
-  tx: Transaction,
+async function emitBlock(
+  interruption: Interruption,
   req: FastifyRequest,
   reply: FastifyReply,
   onBlock: NonNullable<CorazaFastifyOptions['onBlock']>,
 ): Promise<void> {
-  const it = tx.interruption()
-  if (!it) return
-  ;(req.log as Logger).warn('coraza: request blocked', {
-    ruleId: it.ruleId,
-    status: it.status,
-    action: it.action,
-  })
-  await onBlock(it, req, reply)
+  ;(req.log ?? (reply.server as { logger?: unknown }).logger as { warn?: (x: string) => void })?.warn?.(
+    `coraza: request blocked (rule ${interruption.ruleId} status ${interruption.status})`,
+  )
+  await onBlock(interruption, req, reply)
 }
 
-export function* headersOf(
+export function headersOf(
   h: Record<string, string | string[] | number | undefined>,
-): Iterable<[string, string]> {
+): [string, string][] {
+  const out: [string, string][] = []
   for (const [k, v] of Object.entries(h)) {
     if (v === undefined) continue
     if (Array.isArray(v)) {
-      for (const item of v) yield [k, String(item)]
+      for (const item of v) out.push([k, String(item)])
     } else {
-      yield [k, String(v)]
+      out.push([k, String(v)])
     }
   }
+  return out
 }
+
+const encoder = new TextEncoder()
 
 export function serializeBody(body: unknown): Uint8Array | undefined {
   if (body === undefined || body === null) return undefined

@@ -74,7 +74,9 @@ describe('@coraza/next', () => {
     expect(res.headers.get('x-middleware-next')).toBe('1')
   })
 
-  it('skips body when isRequestBodyAccessible is false', async () => {
+  it('runs body phase regardless of isRequestBodyAccessible (bundle always fires phase 2)', async () => {
+    // Post-batch-phases: see docs/security.md. The split-phase flow
+    // silently missed 60% of attacks because CRS phase 2 never ran.
     const { waf, state } = mockWAF('block', {
       onBody: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
     })
@@ -83,7 +85,7 @@ describe('@coraza/next', () => {
     const res = await mw(
       makeReq('https://example.com/', { method: 'POST', body: 'payload' }),
     )
-    expect(res.headers.get('x-middleware-next')).toBe('1')
+    expect(res.status).toBe(403)
   })
 
   it('honors custom onBlock', async () => {
@@ -135,16 +137,22 @@ describe('@coraza/next', () => {
     expect(res.status).toBe(403)
   })
 
-  it('does not treat GET/HEAD/OPTIONS requests as body-bearing', async () => {
-    const { waf } = mockWAF('block', {
-      onBody: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'should not fire' }),
-    })
+  it('does not stream-read the body for GET/HEAD/OPTIONS (avoids req.arrayBuffer waste)', async () => {
+    // The bundle always runs phase 2; body will be undefined for these
+    // verbs so Coraza sees an empty request body. What this test asserts
+    // is the *performance* property that we don't pay to read an
+    // arrayBuffer for verbs that shouldn't have one.
+    const { waf } = mockWAF('block')
     const mw = createCorazaMiddleware(waf)
     for (const method of ['GET', 'HEAD', 'OPTIONS']) {
-      const res = await mw(
-        makeReq('https://example.com/', { method, headers: { 'content-type': 'text/plain' } }),
-      )
-      expect(res.headers.get('x-middleware-next')).toBe('1')
+      const req = makeReq('https://example.com/', {
+        method,
+        headers: { 'content-type': 'text/plain' },
+      })
+      const spy = vi.spyOn(req, 'arrayBuffer')
+      const res = await mw(req)
+      expect(spy).not.toHaveBeenCalled()
+      expect(res.status).toBeGreaterThanOrEqual(200)
     }
   })
 
