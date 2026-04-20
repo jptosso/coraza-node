@@ -1,0 +1,2 @@
+export const CORAZA_WAF = 'CORAZA_WAF'
+export const CORAZA_OPTIONS = 'CORAZA_OPTIONS'

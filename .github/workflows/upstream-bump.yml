@@ -1,0 +1,122 @@
+name: Upstream bump
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # daily 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Bump even if versions unchanged'
+        type: boolean
+        default: false
+
+jobs:
+  check-upstream:
+    name: Detect new Coraza / CRS releases
+    runs-on: ubuntu-latest
+    outputs:
+      coraza_new: ${{ steps.detect.outputs.coraza_new }}
+      crs_new: ${{ steps.detect.outputs.crs_new }}
+      coraza_ver: ${{ steps.detect.outputs.coraza_ver }}
+      crs_ver: ${{ steps.detect.outputs.crs_ver }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pinned versions
+        id: pinned
+        run: |
+          grep coraza= wasm/version.txt | cut -d= -f2 > /tmp/coraza_pinned
+          grep coreruleset= wasm/version.txt | cut -d= -f2 > /tmp/crs_pinned
+          echo "coraza=$(cat /tmp/coraza_pinned)" >> $GITHUB_OUTPUT
+          echo "crs=$(cat /tmp/crs_pinned)" >> $GITHUB_OUTPUT
+
+      - name: Fetch latest upstream releases
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          coraza_latest=$(gh api repos/corazawaf/coraza/releases/latest --jq .tag_name | sed 's/^v//')
+          crs_latest=$(gh api repos/corazawaf/coraza-coreruleset/releases/latest --jq .tag_name | sed 's/^v//')
+          echo "coraza_ver=$coraza_latest" >> $GITHUB_OUTPUT
+          echo "crs_ver=$crs_latest" >> $GITHUB_OUTPUT
+          coraza_new=$( [ "$coraza_latest" != "${{ steps.pinned.outputs.coraza }}" ] && echo 1 || echo 0 )
+          crs_new=$( [ "$crs_latest" != "${{ steps.pinned.outputs.crs }}" ] && echo 1 || echo 0 )
+          echo "coraza_new=$coraza_new" >> $GITHUB_OUTPUT
+          echo "crs_new=$crs_new" >> $GITHUB_OUTPUT
+          echo "Pinned: coraza=${{ steps.pinned.outputs.coraza }} crs=${{ steps.pinned.outputs.crs }}"
+          echo "Latest: coraza=$coraza_latest crs=$crs_latest"
+
+  bump:
+    name: Bump + rebuild + PR
+    needs: check-upstream
+    if: >
+      needs.check-upstream.outputs.coraza_new == '1' ||
+      needs.check-upstream.outputs.crs_new == '1' ||
+      github.event.inputs.force == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Update pinned versions
+        run: |
+          cat > wasm/version.txt <<EOF
+          coraza=${{ needs.check-upstream.outputs.coraza_ver }}
+          coreruleset=${{ needs.check-upstream.outputs.crs_ver }}
+          EOF
+          cd wasm
+          go get github.com/corazawaf/coraza/v3@v${{ needs.check-upstream.outputs.coraza_ver }}
+          go get github.com/corazawaf/coraza-coreruleset/v4@v${{ needs.check-upstream.outputs.crs_ver }}
+          go mod tidy
+
+      - name: Rebuild WASM (Docker, reproducible)
+        run: make -C wasm wasm-docker
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -r test
+
+      - name: Create Changeset entry
+        run: |
+          mkdir -p .changeset
+          cat > .changeset/upstream-bump-$(date +%Y%m%d).md <<EOF
+          ---
+          '@coraza/core': patch
+          '@coraza/coreruleset': patch
+          ---
+
+          Bumped upstream: coraza=${{ needs.check-upstream.outputs.coraza_ver }},
+          coreruleset=${{ needs.check-upstream.outputs.crs_ver }}. Rebuilt WASM.
+          EOF
+
+      - name: Open PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: upstream-bump/coraza-${{ needs.check-upstream.outputs.coraza_ver }}-crs-${{ needs.check-upstream.outputs.crs_ver }}
+          commit-message: 'chore: bump coraza=${{ needs.check-upstream.outputs.coraza_ver }}, crs=${{ needs.check-upstream.outputs.crs_ver }}'
+          title: 'chore: bump Coraza + CRS to latest'
+          body: |
+            Automated upstream bump:
+            - `corazawaf/coraza` → v${{ needs.check-upstream.outputs.coraza_ver }}
+            - `corazawaf/coraza-coreruleset` → v${{ needs.check-upstream.outputs.crs_ver }}
+
+            WASM rebuilt, tests pass. Changeset added for patch-level release
+            of `@coraza/core` and `@coraza/coreruleset`.
+
+            Review the release notes:
+            - https://github.com/corazawaf/coraza/releases/tag/v${{ needs.check-upstream.outputs.coraza_ver }}
+            - https://github.com/corazawaf/coraza-coreruleset/releases/tag/v${{ needs.check-upstream.outputs.crs_ver }}
+          labels: upstream-bump,automated

@@ -1,0 +1,21 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.turbo/
+*.log
+.DS_Store
+.claude/
+.env
+.env.*
+!.env.example
+
+# WASM build artifacts
+wasm/build/
+wasm/*.wasm
+# ...except the committed binary the core package ships
+!packages/core/src/wasm/coraza.wasm
+
+# NestJS
+.nest/

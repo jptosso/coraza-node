@@ -1,0 +1,23 @@
+{
+  "name": "@coraza/example-next",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p ${PORT:-3003}",
+    "build": "next build",
+    "start": "next start -p ${PORT:-3003}"
+  },
+  "dependencies": {
+    "@coraza/core": "workspace:*",
+    "@coraza/coreruleset": "workspace:*",
+    "@coraza/example-shared": "workspace:*",
+    "@coraza/next": "workspace:*",
+    "next": "^15.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "typescript": "^5.6.2"
+  }
+}

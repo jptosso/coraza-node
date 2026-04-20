@@ -1,0 +1,44 @@
+{
+  "name": "@coraza/core",
+  "version": "0.1.0",
+  "description": "OWASP Coraza WAF for Node.js — core engine (WASM loader).",
+  "license": "Apache-2.0",
+  "author": "Juan Pablo Tosso <jptosso@gmail.com>",
+  "homepage": "https://github.com/jptosso/coraza-node",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jptosso/coraza-node.git",
+    "directory": "packages/core"
+  },
+  "keywords": ["waf", "coraza", "owasp", "security", "wasm", "coreruleset"],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "src/wasm/coraza.wasm", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist coverage .turbo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "@vitest/coverage-v8": "^2.1.2",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.2"
+  }
+}

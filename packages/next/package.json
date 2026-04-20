@@ -1,0 +1,48 @@
+{
+  "name": "@coraza/next",
+  "version": "0.1.0",
+  "description": "Next.js middleware adapter for Coraza WAF (Node runtime).",
+  "license": "Apache-2.0",
+  "author": "Juan Pablo Tosso <jptosso@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jptosso/coraza-node.git",
+    "directory": "packages/next"
+  },
+  "keywords": ["nextjs", "next", "waf", "coraza", "security", "middleware"],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist coverage .turbo playwright-report test-results"
+  },
+  "peerDependencies": {
+    "@coraza/core": "workspace:*",
+    "next": "^14.0.0 || ^15.0.0"
+  },
+  "devDependencies": {
+    "@coraza/core": "workspace:*",
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^22.7.5",
+    "@vitest/coverage-v8": "^2.1.2",
+    "next": "^15.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.2"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@coraza/example-nestjs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@coraza/core": "workspace:*",
+    "@coraza/coreruleset": "workspace:*",
+    "@coraza/example-shared": "workspace:*",
+    "@coraza/nestjs": "workspace:*",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}

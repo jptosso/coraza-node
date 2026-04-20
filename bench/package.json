@@ -1,0 +1,17 @@
+{
+  "name": "@coraza/bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "tsx run.ts",
+    "bench:all": "tsx run.ts --adapters=express,fastify,nestjs",
+    "k6": "tsx k6-run.ts",
+    "k6:all": "tsx k6-run.ts --adapters=express,fastify,nestjs"
+  },
+  "dependencies": {
+    "@coraza/example-shared": "workspace:*",
+    "autocannon": "^8.0.0",
+    "tsx": "^4.19.1"
+  }
+}

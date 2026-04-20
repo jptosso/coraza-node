@@ -1,0 +1,41 @@
+{
+  "name": "coraza-node",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OWASP Coraza WAF for Node.js — monorepo root",
+  "license": "Apache-2.0",
+  "author": "Juan Pablo Tosso <jptosso@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jptosso/coraza-node.git"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "e2e": "turbo run e2e",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "wasm": "make -C wasm wasm-docker",
+    "wasm:host": "make -C wasm wasm",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "turbo run build && changeset publish",
+    "bench": "pnpm -F @coraza/bench bench",
+    "k6": "pnpm -F @coraza/bench k6"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.9",
+    "@types/node": "^22.7.5",
+    "@vitest/coverage-v8": "^2.1.2",
+    "tsup": "^8.3.0",
+    "turbo": "^2.1.3",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.2"
+  }
+}
