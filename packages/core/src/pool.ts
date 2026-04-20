@@ -10,7 +10,7 @@
 //
 //   const pool = await createWAFPool({ size: os.availableParallelism(), ...config })
 //   const tx = await pool.newTransaction()
-//   if (await tx.processRequest({ ... })) {
+//   if (await tx.processRequestBundle({ ... }, body)) {
 //     const it = await tx.interruption()
 //     // block
 //   }
@@ -88,17 +88,19 @@ export class WAFPool {
         try {
           const tx = await pool.newTransaction()
           try {
-            await tx.processRequest({
-              method: 'GET',
-              url: '/__coraza_prewarm',
-              protocol: 'HTTP/1.1',
-              headers: [['host', 'prewarm.local']],
-              remoteAddr: '127.0.0.1',
-              remotePort: 0,
-              serverPort: 0,
-            })
-            // Also trigger the body phase so phase-2 rules get JIT-compiled.
-            await tx.processRequestBody('prewarm-body')
+            // Fused bundle exercises phases 1+2 so both rule sets get JITed.
+            await tx.processRequestBundle(
+              {
+                method: 'GET',
+                url: '/__coraza_prewarm',
+                protocol: 'HTTP/1.1',
+                headers: [['host', 'prewarm.local']],
+                remoteAddr: '127.0.0.1',
+                remotePort: 0,
+                serverPort: 0,
+              },
+              'prewarm-body',
+            )
           } finally {
             await tx.close()
           }
@@ -181,22 +183,12 @@ export class WorkerTransaction {
     this.#txId = txId
   }
 
-  async processRequest(req: RequestInfo): Promise<boolean> {
-    const { interrupted } = await this.#proc('request', req)
-    return interrupted
-  }
-
   /** Fused request phase — one worker round-trip instead of 2-5. */
   async processRequestBundle(
     req: RequestInfo,
     body: Uint8Array | string | undefined,
   ): Promise<boolean> {
     const { interrupted } = await this.#proc('requestBundle', { req, body })
-    return interrupted
-  }
-
-  async processRequestBody(body?: Uint8Array | string): Promise<boolean> {
-    const { interrupted } = await this.#proc('requestBody', body)
     return interrupted
   }
 
@@ -261,7 +253,7 @@ export class WorkerTransaction {
   }
 
   async #proc(
-    op: 'request' | 'requestBundle' | 'requestBody' | 'response' | 'responseBody' | 'logging',
+    op: 'requestBundle' | 'response' | 'responseBody' | 'logging',
     args: unknown,
   ): Promise<{ interrupted: boolean }> {
     const r = await callSlot<{ interrupted?: boolean }>(this.#slot, {

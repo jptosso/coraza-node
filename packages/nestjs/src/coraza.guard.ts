@@ -18,6 +18,11 @@ import type {
 import { buildSkipPredicate, pathOf } from '@coraza/core'
 import { CORAZA_WAF, CORAZA_OPTIONS } from './tokens.js'
 
+type OnBlock = (interruption: Interruption) => HttpException
+
+const defaultOnBlock: OnBlock = (i) =>
+  new HttpException(`Request blocked by Coraza (rule ${i.ruleId})`, i.status || 403)
+
 // Minimal shapes of Express/Fastify request+reply that NestJS exposes via
 // switchToHttp(). We avoid a hard dep on either framework.
 interface HttpReq {
@@ -41,6 +46,7 @@ export class CorazaGuard implements CanActivate {
   private readonly logger = new Logger('CorazaGuard')
   private readonly shouldSkip: (path: string) => boolean
   private readonly onWAFError: 'allow' | 'block'
+  private readonly onBlock: OnBlock
 
   constructor(
     @Inject(CORAZA_WAF) private readonly waf: AnyWAF,
@@ -48,10 +54,12 @@ export class CorazaGuard implements CanActivate {
     opts: {
       skip?: SkipOptions | false
       onWAFError?: 'allow' | 'block'
+      onBlock?: OnBlock
     } = {},
   ) {
     this.shouldSkip = opts.skip === false ? () => false : buildSkipPredicate(opts.skip)
     this.onWAFError = opts.onWAFError ?? 'block'
+    this.onBlock = opts.onBlock ?? defaultOnBlock
   }
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -66,7 +74,13 @@ export class CorazaGuard implements CanActivate {
     } catch (err) {
       this.logger.error(`newTransaction failed: ${(err as Error).message}`)
       if (this.onWAFError === 'block') {
-        throw new HttpException('WAF unavailable', 503)
+        throw this.onBlock({
+          ruleId: 0,
+          action: 'deny',
+          status: 503,
+          data: 'WAF unavailable',
+          source: 'waf-error',
+        })
       }
       return true
     }
@@ -101,7 +115,13 @@ export class CorazaGuard implements CanActivate {
         } finally {
           await tx.close()
         }
-        throw new HttpException('WAF internal error', 503)
+        throw this.onBlock({
+          ruleId: 0,
+          action: 'deny',
+          status: 503,
+          data: 'WAF internal error',
+          source: 'waf-error',
+        })
       }
       // onWAFError === 'allow' falls through to processLogging + close
       // + return true below.
@@ -117,10 +137,7 @@ export class CorazaGuard implements CanActivate {
       this.logger.warn(
         `blocked request (rule=${interruption.ruleId} action=${interruption.action} status=${interruption.status})`,
       )
-      throw new HttpException(
-        `Request blocked by Coraza (rule ${interruption.ruleId})`,
-        interruption.status || 403,
-      )
+      throw this.onBlock(interruption)
     }
     return true
   }

@@ -16,15 +16,18 @@ function setup(opts: Parameters<typeof createMock>[0] = {}) {
 describe('Transaction', () => {
   it('processes a full request (connection + uri + headers) without interrupt', () => {
     const { tx, state, txId } = setup()
-    const interrupted = tx.processRequest({
-      method: 'GET',
-      url: '/health',
-      protocol: 'HTTP/1.1',
-      headers: [['Host', 'example.com']],
-      remoteAddr: '203.0.113.5',
-      remotePort: 45000,
-      serverPort: 80,
-    })
+    const interrupted = tx.processRequestBundle(
+      {
+        method: 'GET',
+        url: '/health',
+        protocol: 'HTTP/1.1',
+        headers: [['Host', 'example.com']],
+        remoteAddr: '203.0.113.5',
+        remotePort: 45000,
+        serverPort: 80,
+      },
+      undefined,
+    )
     expect(interrupted).toBe(false)
     const txState = state.txs.get(txId)!
     expect(txState.conn).toEqual({ addr: '203.0.113.5', cport: 45000, sport: 80 })
@@ -32,27 +35,20 @@ describe('Transaction', () => {
     expect(txState.headers).toEqual([['Host', 'example.com']])
   })
 
-  it('defaults protocol to HTTP/1.1 and omits connection when no remoteAddr', () => {
+  it('defaults protocol to HTTP/1.1 in the bundle encoder', () => {
     const { tx, state, txId } = setup()
-    tx.processRequest({
-      method: 'POST',
-      url: '/',
-      headers: [],
-    })
-    const txState = state.txs.get(txId)!
-    expect(txState.conn).toBeUndefined()
-    expect(txState.uri?.proto).toBe('HTTP/1.1')
+    tx.processRequestBundle({ method: 'POST', url: '/', headers: [] }, undefined)
+    expect(state.txs.get(txId)!.uri?.proto).toBe('HTTP/1.1')
   })
 
   it('returns true when headers trigger an interruption and exposes verdict', () => {
     const { tx } = setup({
       onHeaders: () => ({ ruleId: 942100, action: 'deny', status: 403, data: 'SQLi' }),
     })
-    const interrupted = tx.processRequest({
-      method: 'GET',
-      url: "/?q=' OR 1=1--",
-      headers: [],
-    })
+    const interrupted = tx.processRequestBundle(
+      { method: 'GET', url: "/?q=' OR 1=1--", headers: [] },
+      undefined,
+    )
     expect(interrupted).toBe(true)
     expect(tx.interruption()).toEqual({
       ruleId: 942100,
@@ -64,26 +60,28 @@ describe('Transaction', () => {
 
   it('interruption() returns null when none raised', () => {
     const { tx } = setup()
-    tx.processRequest({ method: 'GET', url: '/', headers: [] })
+    tx.processRequestBundle({ method: 'GET', url: '/', headers: [] }, undefined)
     expect(tx.interruption()).toBeNull()
   })
 
-  it('processRequestBody with string or Uint8Array; empty body short-circuits', () => {
+  it('bundle carries body; string and Uint8Array encode the same bytes', () => {
     const { tx, state, txId } = setup()
-    tx.processRequestBody('hello')
+    tx.processRequestBundle({ method: 'POST', url: '/', headers: [] }, 'hello')
     expect(new TextDecoder().decode(state.txs.get(txId)!.lastBody!)).toBe('hello')
-    tx.processRequestBody(new Uint8Array([1, 2, 3]))
+    tx.processRequestBundle(
+      { method: 'POST', url: '/', headers: [] },
+      new Uint8Array([1, 2, 3]),
+    )
     expect(Array.from(state.txs.get(txId)!.lastBody!)).toEqual([1, 2, 3])
-    // empty
-    expect(tx.processRequestBody()).toBe(false)
-    expect(tx.processRequestBody('')).toBe(false)
   })
 
-  it('returns true when body triggers an interrupt', () => {
+  it('returns true when body triggers an interrupt via the bundle', () => {
     const { tx } = setup({
       onBody: () => ({ ruleId: 2, action: 'deny', status: 403, data: 'XSS' }),
     })
-    expect(tx.processRequestBody('<script>')).toBe(true)
+    expect(
+      tx.processRequestBundle({ method: 'POST', url: '/', headers: [] }, '<script>'),
+    ).toBe(true)
   })
 
   it('append + finish request body flow', () => {
@@ -172,8 +170,7 @@ describe('Transaction', () => {
   it('operations throw after close', () => {
     const { tx } = setup()
     tx.close()
-    expect(() => tx.processRequest({ method: 'GET', url: '/', headers: [] })).toThrow(/closed/)
-    expect(() => tx.processRequestBody('x')).toThrow(/closed/)
+    expect(() => tx.processRequestBundle({ method: 'GET', url: '/', headers: [] }, undefined)).toThrow(/closed/)
     expect(() => tx.appendRequestBody(new Uint8Array([1]))).toThrow(/closed/)
     expect(() => tx.finishRequestBody()).toThrow(/closed/)
     expect(() => tx.processResponse({ status: 200, headers: [] })).toThrow(/closed/)
@@ -187,7 +184,9 @@ describe('Transaction', () => {
 
   it('throws on OOM when malloc fails for input buffers', () => {
     const { tx } = setup({ mallocFailAfter: 0 })
-    expect(() => tx.processRequestBody('hi')).toThrow(/OOM/)
+    expect(() =>
+      tx.processRequestBundle({ method: 'POST', url: '/', headers: [] }, 'hi'),
+    ).toThrow(/OOM/)
   })
 
   it('processConnection with defaults works', () => {

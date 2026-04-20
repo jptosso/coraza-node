@@ -4,6 +4,7 @@ import { fileURLToPath, URL } from 'node:url'
 export default defineConfig({
   resolve: {
     alias: {
+      '@coraza/core/internal': fileURLToPath(new URL('../core/src/internal.ts', import.meta.url)),
       '@coraza/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
     },
   },

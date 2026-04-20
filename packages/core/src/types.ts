@@ -39,6 +39,14 @@ export interface Interruption {
   action: string
   status: number
   data: string
+  /**
+   * Set to `'waf-error'` on interruptions synthesized by an adapter after
+   * the WAF itself failed (bundle-encode crash, pool worker death, WASM
+   * trap). Absent on genuine CRS rule hits. Use this to distinguish
+   * availability failures from security blocks in your `onBlock` handler
+   * and in logs/audits.
+   */
+  source?: 'waf-error'
 }
 
 export interface MatchedRule {

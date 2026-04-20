@@ -1,6 +1,6 @@
 import { createWAF } from '@coraza/core'
 import { recommended } from '@coraza/coreruleset'
-import { createCorazaMiddleware } from '@coraza/next'
+import { coraza } from '@coraza/next'
 
 const wafDisabled = process.env.WAF === 'off'
 
@@ -12,7 +12,7 @@ const wafPromise = wafDisabled
     })
 
 export const middleware = wafPromise
-  ? createCorazaMiddleware(wafPromise)
+  ? coraza({ waf: wafPromise })
   : async () => undefined as unknown as Response
 
 export const config = {

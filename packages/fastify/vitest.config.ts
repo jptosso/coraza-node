@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '@coraza/core/internal': new URL('../core/src/internal.ts', import.meta.url).pathname,
       '@coraza/core': new URL('../core/src/index.ts', import.meta.url).pathname,
     },
   },

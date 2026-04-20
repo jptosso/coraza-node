@@ -98,17 +98,33 @@ describe('CorazaGuard', () => {
     ).rejects.toThrow(HttpException)
   })
 
-  it('continues when WAF itself throws (fail-open)', async () => {
+  it('fails closed (503) when WAF itself throws (default)', async () => {
     const { waf } = mockWAF('block')
     const realNew = waf.newTransaction.bind(waf)
     waf.newTransaction = () => {
       const tx = realNew()
-      tx.processRequest = () => {
+      tx.processRequestBundle = () => {
         throw new Error('boom')
       }
       return tx
     }
     const guard = new CorazaGuard(waf)
+    await expect(
+      guard.canActivate(ctx({ method: 'GET', url: '/', headers: {}, socket: {} })),
+    ).rejects.toMatchObject({ getStatus: expect.any(Function) })
+  })
+
+  it('onWAFError: allow continues through WAF internal error', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('boom')
+      }
+      return tx
+    }
+    const guard = new CorazaGuard(waf, { onWAFError: 'allow' })
     const ok = await guard.canActivate(ctx({ method: 'GET', url: '/', headers: {}, socket: {} }))
     expect(ok).toBe(true)
   })

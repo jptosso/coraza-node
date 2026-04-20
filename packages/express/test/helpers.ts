@@ -1,7 +1,8 @@
 // Shared test helpers: build a real @coraza/core WAF on top of the mock ABI.
 // Keeps adapter tests focused on framework-adapter behavior, not WAF internals.
 
-import { Abi, WAF, silentLogger, type Mode } from '@coraza/core'
+import { WAF, silentLogger, type Mode } from '@coraza/core'
+import { Abi } from '@coraza/core/internal'
 // The mock ABI lives in @coraza/core's test folder; we re-export through a
 // relative path since it's not in the package's `exports` map.
 // Vitest hoists, so relative paths from node_modules don't resolve — copy

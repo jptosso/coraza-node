@@ -87,7 +87,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
       )
       if (onWAFError === 'block' && !reply.sent) {
         await emitBlock(
-          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable' },
+          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
           req,
           reply,
           onBlock,
@@ -124,7 +124,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
       )
       if (onWAFError === 'block' && !reply.sent) {
         await emitBlock(
-          { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error' },
+          { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error', source: 'waf-error' },
           req,
           reply,
           onBlock,

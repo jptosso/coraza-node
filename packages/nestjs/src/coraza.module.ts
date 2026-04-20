@@ -1,5 +1,5 @@
-import { DynamicModule, Module, type Provider } from '@nestjs/common'
-import { createWAF, type WAF, type WAFConfig, type SkipOptions } from '@coraza/core'
+import { DynamicModule, HttpException, Module, type Provider } from '@nestjs/common'
+import { createWAF, type WAF, type WAFConfig, type SkipOptions, type Interruption } from '@coraza/core'
 import { CorazaGuard } from './coraza.guard.js'
 import { CORAZA_OPTIONS, CORAZA_WAF } from './tokens.js'
 
@@ -11,6 +11,21 @@ export interface CorazaNestOptions extends WAFConfig {
   globalGuard?: boolean
   /** Bypass Coraza for static/media paths. See `SkipOptions`. */
   skip?: SkipOptions | false
+  /**
+   * Build the HttpException thrown on a block decision. Receives the
+   * Coraza `Interruption`; defaults to `new HttpException('Request
+   * blocked by Coraza (rule <id>)', interruption.status || 403)`.
+   *
+   * Also fires on WAF failure (with a synthesized 503 Interruption) when
+   * `onWAFError: 'block'` — check `interruption.source === 'waf-error'`
+   * to distinguish a rule hit from a WAF crash.
+   */
+  onBlock?: (interruption: Interruption) => HttpException
+  /**
+   * What to do if the WAF throws mid-request. Default `'block'` (503).
+   * `'allow'` lets the request through; see docs/security.md.
+   */
+  onWAFError?: 'allow' | 'block'
 }
 
 export interface CorazaNestAsyncOptions {

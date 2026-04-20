@@ -1,17 +1,19 @@
 // @coraza/next — Next.js middleware adapter.
 //
 // Next 15 defaults its `middleware.ts` to the Node.js runtime, which is the
-// only target we support (Edge Runtime lacks WASI). Users wire the factory
-// into their `middleware.ts` like this:
+// only target we support (Edge Runtime lacks WASI).
 //
 //   // middleware.ts
-//   import { createCorazaMiddleware } from '@coraza/next'
 //   import { createWAF } from '@coraza/core'
+//   import { coraza } from '@coraza/next'
 //   import { recommended } from '@coraza/coreruleset'
 //
-//   const wafPromise = createWAF({ rules: recommended(), mode: 'block' })
-//   export const middleware = createCorazaMiddleware(wafPromise)
+//   const waf = createWAF({ rules: recommended(), mode: 'block' })
+//   export const middleware = coraza({ waf })
 //   export const config = { matcher: '/:path*', runtime: 'nodejs' }
+//
+// The adapter signature — `coraza({ waf, ...opts })` — matches
+// @coraza/express and @coraza/fastify so the mental model transfers.
 //
 // Design notes:
 //   - Uses `processRequestBundle` so phases 1+2 run atomically. The prior
@@ -31,6 +33,12 @@ import { buildSkipPredicate } from '@coraza/core'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export interface CorazaNextOptions {
+  /**
+   * A built WAF or WAFPool. A promise is also accepted so `middleware.ts`
+   * modules that can't do top-level await (CJS consumers) can defer
+   * construction.
+   */
+  waf: WAF | WAFPool | Promise<WAF | WAFPool>
   onBlock?: (interruption: Interruption, req: NextRequest) => Response
   /**
    * If true, also inspect the response. Not implemented in v1 — Next
@@ -51,15 +59,14 @@ export interface CorazaNextOptions {
 type AnyWAF = WAF | WAFPool
 
 /**
- * Build a Next.js middleware. Accepts either a WAF/WAFPool or a promise
- * of one so the consuming `middleware.ts` doesn't need top-level await
- * in CJS.
+ * Build a Next.js middleware. Matches the adapter shape used by the
+ * other frameworks (`coraza({ waf, ...options })`) — pass a single
+ * object with a `waf` key.
  */
-export function createCorazaMiddleware(
-  wafOrPromise: AnyWAF | Promise<AnyWAF>,
-  options: CorazaNextOptions = {},
+export function coraza(
+  options: CorazaNextOptions,
 ): (req: NextRequest) => Promise<Response> {
-  const { onBlock = defaultBlock, onWAFError = 'block' } = options
+  const { waf: wafOrPromise, onBlock = defaultBlock, onWAFError = 'block' } = options
   const shouldSkip = options.skip === false ? () => false : buildSkipPredicate(options.skip)
 
   let wafRef: AnyWAF | null = null
@@ -83,7 +90,7 @@ export function createCorazaMiddleware(
       log.error('coraza: newTransaction failed', { err: (err as Error).message })
       return onWAFError === 'block'
         ? onBlock(
-            { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable' },
+            { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
             req,
           )
         : NextResponse.next()
@@ -115,7 +122,7 @@ export function createCorazaMiddleware(
       log.error('coraza: middleware error', { err: (err as Error).message })
       return onWAFError === 'block'
         ? onBlock(
-            { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error' },
+            { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error', source: 'waf-error' },
             req,
           )
         : NextResponse.next()

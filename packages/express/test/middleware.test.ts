@@ -57,7 +57,7 @@ describe('@coraza/express', () => {
     const res = await request(app).get("/hi?q='OR 1=1--")
     expect(res.status).toBe(200)
     const tx = [...state.txs.values()][0]
-    // processRequest should not have been called — no URI captured
+    // Bundle should not have run — no URI captured
     expect(tx?.uri).toBeUndefined()
   })
 
@@ -364,19 +364,34 @@ describe('@coraza/express', () => {
     expect(tx.conn).toEqual({ addr: '', cport: 0, sport: 0 })
   })
 
-  it('catches errors inside middleware after transaction is created', async () => {
+  it('fails closed (503) when the bundle call itself throws', async () => {
     const { waf } = mockWAF('block')
     const realNew = waf.newTransaction.bind(waf)
     waf.newTransaction = () => {
       const tx = realNew()
-      tx.processRequest = () => {
-        throw new Error('processRequest boom')
+      tx.processRequestBundle = () => {
+        throw new Error('processRequestBundle boom')
       }
       return tx
     }
     const app = appWith(coraza({ waf }))
     const res = await request(app).get('/hi')
-    expect(res.status).toBe(200) // fell through to next()
+    expect(res.status).toBe(503)
+  })
+
+  it('onWAFError: allow falls through to next() when the bundle throws', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('processRequestBundle boom')
+      }
+      return tx
+    }
+    const app = appWith(coraza({ waf, onWAFError: 'allow' }))
+    const res = await request(app).get('/hi')
+    expect(res.status).toBe(200)
   })
 
   it('bypasses static/media paths by default (no transaction created)', async () => {

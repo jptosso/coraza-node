@@ -21,6 +21,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "import": "./dist/internal.js",
+      "require": "./dist/internal.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": ["dist", "src/wasm/coraza.wasm", "README.md", "LICENSE"],

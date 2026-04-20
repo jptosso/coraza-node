@@ -1,0 +1,64 @@
+name: Docs site
+
+# Publishes docs/site/ to GitHub Pages whenever anything under docs/ changes
+# on main. Static site (HTML + CSS + JS); no build step.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one publish in flight at a time; queue the rest.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Assemble site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble public/
+        run: |
+          set -euo pipefail
+          mkdir -p public
+          # Primary: the designed docs site.
+          cp -r docs/site/. public/
+          # Also publish the markdown docs as raw files so internal links
+          # (docs/security.md, docs/performance.md, etc.) resolve when
+          # visitors follow them from the static site.
+          mkdir -p public/md
+          for f in docs/*.md; do
+            [ -f "$f" ] && cp "$f" public/md/
+          done
+          # Nojekyll so GitHub Pages serves files starting with underscores
+          # (Next's /_next/* paths would otherwise 404 if referenced).
+          touch public/.nojekyll
+          ls -la public/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

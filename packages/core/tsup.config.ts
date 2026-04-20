@@ -2,9 +2,9 @@ import { defineConfig } from 'tsup'
 import { cpSync, mkdirSync } from 'node:fs'
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/pool-worker.ts'],
+  entry: ['src/index.ts', 'src/internal.ts', 'src/pool-worker.ts'],
   format: ['esm', 'cjs'],
-  dts: { entry: ['src/index.ts'] },
+  dts: { entry: ['src/index.ts', 'src/internal.ts'] },
   sourcemap: true,
   clean: true,
   target: 'node20',

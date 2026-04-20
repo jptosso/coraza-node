@@ -29,7 +29,7 @@ type ProcMsg = {
   reqId: number
   type: 'proc'
   txId: number
-  op: 'request' | 'requestBundle' | 'requestBody' | 'response' | 'responseBody' | 'logging'
+  op: 'requestBundle' | 'response' | 'responseBody' | 'logging'
   args?: unknown
 }
 type PredMsg = {
@@ -73,17 +73,11 @@ parentPort.on('message', async (msg: Msg) => {
         if (!tx) throw new Error(`unknown tx ${msg.txId}`)
         let interrupted: boolean | void = false
         switch (msg.op) {
-          case 'request':
-            interrupted = tx.processRequest(msg.args as RequestInfo)
-            break
           case 'requestBundle': {
             const a = msg.args as { req: RequestInfo; body: Uint8Array | string | undefined }
             interrupted = tx.processRequestBundle(a.req, a.body)
             break
           }
-          case 'requestBody':
-            interrupted = tx.processRequestBody(msg.args as Uint8Array | string | undefined)
-            break
           case 'response':
             interrupted = tx.processResponse(msg.args as ResponseInfo)
             break

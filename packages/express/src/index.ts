@@ -22,6 +22,7 @@ import type {
   Transaction,
   Interruption,
   Logger,
+  RequestInfo,
   SkipOptions,
 } from '@coraza/core'
 import { buildSkipPredicate, pathOf } from '@coraza/core'
@@ -97,7 +98,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
       log.error('coraza: newTransaction failed', { err: (err as Error).message })
       if (onWAFError === 'block' && !res.headersSent) {
         onBlock(
-          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable' },
+          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
           req,
           res,
         )
@@ -160,7 +161,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
         // WAF can't be weaponized into a bypass.
         if (!res.headersSent) {
           onBlock(
-            { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error' },
+            { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error', source: 'waf-error' },
             req,
             res,
           )
@@ -233,13 +234,9 @@ function extractBody(req: Request): Uint8Array | undefined {
   }
 }
 
-// A Transaction (sync) vs a WorkerTransaction (async) can be distinguished
-// by checking whether processRequest returned a Promise. Instead of that
-// (requires running a call), we use a structural check: sync txs have
-// non-async method signatures but at runtime they share. We tag via a
-// symbol during newTransaction — simpler: peek the return type of
-// `isRuleEngineOff()` by calling it and checking for a Promise. Cheapest:
-// just check if `close` returns a Promise.
+// A Transaction (sync) vs a WorkerTransaction (async): the worker variant's
+// methods are defined with `async`, so `close.constructor.name` is
+// 'AsyncFunction'; the sync Transaction's methods are plain functions.
 function isSyncTx(tx: AnyTransaction): tx is Transaction {
   // WorkerTransaction methods are defined with `async`; their prototype's
   // constructor is 'AsyncFunction'. Transaction methods are plain.

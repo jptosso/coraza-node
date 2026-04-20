@@ -6,9 +6,8 @@ const HEADER_BUF_INIT = 8192
 /**
  * One transaction per HTTP request. Lifecycle:
  *
- *   processConnection → processRequest → (optional) processRequestBody →
- *     maybe interrupt → processResponse → processResponseBody →
- *     processLogging → close
+ *   processRequestBundle → maybe interrupt → processResponse →
+ *     processResponseBody → processLogging → close
  *
  * Calls are synchronous and fast (< 1 ms for typical requests). The class
  * is stateful but cheap to construct; one instance per request.
@@ -37,52 +36,6 @@ export class Transaction {
   }
 
   /**
-   * Process the full request line + headers. Returns `true` if Coraza raised
-   * an interruption and the caller should block.
-   */
-  processRequest(req: RequestInfo): boolean {
-    this.#ensureOpen()
-    if (req.remoteAddr !== undefined) {
-      this.processConnection(req.remoteAddr, req.remotePort ?? 0, req.serverPort ?? 0)
-    }
-
-    const method = utf8(req.method)
-    const url = utf8(req.url)
-    const proto = utf8(req.protocol ?? 'HTTP/1.1')
-    const methodPtr = this.#writeMalloc(method)
-    const urlPtr = this.#writeMalloc(url)
-    const protoPtr = this.#writeMalloc(proto)
-    try {
-      this.#abi.check(
-        this.#abi.exports.tx_process_uri(
-          this.#id,
-          methodPtr,
-          method.length,
-          urlPtr,
-          url.length,
-          protoPtr,
-          proto.length,
-        ),
-        'tx_process_uri',
-      )
-    } finally {
-      this.#abi.exports.host_free(methodPtr)
-      this.#abi.exports.host_free(urlPtr)
-      this.#abi.exports.host_free(protoPtr)
-    }
-
-    const pkt = encodeHeaders(req.headers, this.#headerBuf)
-    const pktPtr = this.#writeMalloc(pkt)
-    try {
-      const rc = this.#abi.exports.tx_process_request_headers(this.#id, pktPtr, pkt.length)
-      this.#abi.check(rc, 'tx_process_request_headers')
-      return rc === 1
-    } finally {
-      this.#abi.exports.host_free(pktPtr)
-    }
-  }
-
-  /**
    * True if `SecRuleEngine Off` is effective for this transaction. When true,
    * the adapter SHOULD skip the entire request — no headers, no body, no
    * response inspection. Cheapest possible early-exit.
@@ -96,9 +49,9 @@ export class Transaction {
    * True if Coraza will inspect the request body for this transaction. Use
    * this to short-circuit body serialization in your adapter — if the engine
    * has no rules that fire on this body (content-type / size / rule hints),
-   * skip `processRequestBody` entirely.
+   * skip the body entirely.
    *
-   * Call AFTER `processRequest` — header rules can toggle accessibility.
+   * Call AFTER `processRequestBundle` — header rules can toggle accessibility.
    */
   isRequestBodyAccessible(): boolean {
     this.#ensureOpen()
@@ -145,25 +98,6 @@ export class Transaction {
     try {
       const rc = this.#abi.exports.tx_process_request_bundle(this.#id, ptr, bundle.length)
       this.#abi.check(rc, 'tx_process_request_bundle')
-      return rc === 1
-    } finally {
-      this.#abi.exports.host_free(ptr)
-    }
-  }
-
-  /** Process the full request body in one shot. Returns true on interruption. */
-  processRequestBody(body?: Uint8Array | string): boolean {
-    this.#ensureOpen()
-    const bytes = typeof body === 'string' ? utf8(body) : body ?? new Uint8Array(0)
-    if (bytes.length === 0) {
-      const rc = this.#abi.exports.tx_process_request_body(this.#id, 0, 0)
-      this.#abi.check(rc, 'tx_process_request_body')
-      return rc === 1
-    }
-    const ptr = this.#writeMalloc(bytes)
-    try {
-      const rc = this.#abi.exports.tx_process_request_body(this.#id, ptr, bytes.length)
-      this.#abi.check(rc, 'tx_process_request_body')
       return rc === 1
     } finally {
       this.#abi.exports.host_free(ptr)

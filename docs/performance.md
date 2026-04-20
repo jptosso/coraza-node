@@ -27,10 +27,10 @@ All rows POOL=8, TinyGo WASM, k6 mixed traffic (50 VUs, 20 s, ~5% attacks).
 
 Before `exp/batch-phases` merged, we were **missing ~60% of attack
 requests**. CRS's anomaly-score evaluator (rule `949110`, deny at
-threshold) fires at phase 2. When `processRequest` / `processRequestBody`
-were separate WASM calls, GET requests with SQLi in the query string
-never ran phase 2 (no body to process), so the anomaly block never
-triggered. The fused bundle always runs phase 2 (even with empty body),
+threshold) fires at phase 2. When phases 1 and 2 were separate WASM
+calls, GET requests with SQLi in the query string never ran phase 2 (no
+body to process), so the anomaly block never triggered. The fused
+`processRequestBundle` always runs phase 2 (even with empty body),
 matching Coraza's intended flow.
 
 **If you're on an older build, upgrade** — the attack-detection-rate

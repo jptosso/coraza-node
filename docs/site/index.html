@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Coraza Node · Docs</title>
+<meta name="description" content="OWASP Coraza WAF for Node.js — ships as an npm package. No sidecar, no native build. Adapters for Express, Fastify, Next.js, NestJS." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="auto" data-density="comfy">
+
+<!-- ============== TOP BAR ============== -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#top">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2.5 3.5 6v6.2c0 4.4 3.2 7.9 8.5 9.3 5.3-1.4 8.5-4.9 8.5-9.3V6L12 2.5z"/>
+          <path d="m8.5 12 2.5 2.5L16 10"/>
+        </svg>
+      </span>
+      <span class="brand-name">coraza<span class="brand-dim">/node</span></span>
+      <span class="brand-ver">v0.1.0</span>
+    </a>
+
+    <nav class="topnav" aria-label="Primary">
+      <a href="#quickstart" class="topnav-link">Docs</a>
+      <a href="#api-core" class="topnav-link">API</a>
+      <a href="#recipes" class="topnav-link">Recipes</a>
+      <a href="https://github.com/jptosso/coraza-node" class="topnav-link" rel="noopener">GitHub ↗</a>
+    </nav>
+
+    <div class="topbar-actions">
+      <button class="search-trigger" id="searchTrigger" aria-label="Open search">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <span>Search docs</span>
+        <kbd>⌘K</kbd>
+      </button>
+      <button class="icon-btn" id="themeToggle" aria-label="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <!-- ============== SIDEBAR ============== -->
+  <aside class="sidebar" id="sidebar" aria-label="Docs navigation">
+    <div class="sidebar-inner">
+      <div class="side-section">
+        <div class="side-label">Introduction</div>
+        <a href="#overview" class="side-link">Overview</a>
+        <a href="#how-it-works" class="side-link">How it works</a>
+        <a href="#install" class="side-link">Install</a>
+        <a href="#quickstart" class="side-link">Quick start</a>
+      </div>
+
+      <div class="side-section">
+        <div class="side-label">Core</div>
+        <a href="#api-core" class="side-link">@coraza/core</a>
+        <a href="#core-create" class="side-link side-sub">createWAF()</a>
+        <a href="#core-pool" class="side-link side-sub">createWAFPool()</a>
+        <a href="#core-transaction" class="side-link side-sub">Transaction</a>
+        <a href="#api-coreruleset" class="side-link">@coraza/coreruleset</a>
+      </div>
+
+      <div class="side-section">
+        <div class="side-label">Adapters</div>
+        <a href="#api-express" class="side-link"><span class="side-dot" data-adapter="express"></span>Express</a>
+        <a href="#api-fastify" class="side-link"><span class="side-dot" data-adapter="fastify"></span>Fastify</a>
+        <a href="#api-next" class="side-link"><span class="side-dot" data-adapter="next"></span>Next.js</a>
+        <a href="#api-nestjs" class="side-link"><span class="side-dot" data-adapter="nestjs"></span>NestJS</a>
+      </div>
+
+      <div class="side-section">
+        <div class="side-label">Guides</div>
+        <a href="#recipes" class="side-link">Recipes</a>
+        <a href="#security" class="side-link">Security</a>
+        <a href="#perf" class="side-link">Performance</a>
+      </div>
+
+      <div class="side-footer">
+        <div class="side-kbd-row"><kbd>⌘</kbd><kbd>K</kbd><span>Search</span></div>
+        <div class="side-kbd-row"><kbd>⌘</kbd><kbd>.</kbd><span>Toggle theme</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============== MAIN ============== -->
+  <main class="main" id="top">
+
+    <!-- HERO -->
+    <section class="hero" id="overview">
+      <div class="crumbs"><span>Docs</span><span class="crumb-sep">/</span><span>Coraza for Node.js</span></div>
+      <h1 class="h1">Coraza for Node.js</h1>
+      <p class="lede">OWASP Coraza is a full-featured web application firewall. <span class="lede-accent">coraza-node</span> ships it as a plain npm package — the engine compiles to WebAssembly via TinyGo, so there's no sidecar, no native build step. Drop an adapter into your server and you have CRS protection in front of every request.</p>
+
+      <div class="hero-pills">
+        <span class="pill"><span class="pill-k">npm</span><code>@coraza/core</code></span>
+        <span class="pill"><span class="pill-k">runtime</span>Node ≥ 20</span>
+        <span class="pill"><span class="pill-k">engine</span>Coraza v3 · WASM</span>
+        <span class="pill"><span class="pill-k">ruleset</span>CRS 4.10 bundled</span>
+        <span class="pill pill-ok"><span class="pill-k">license</span>Apache-2.0</span>
+      </div>
+
+      <div class="hero-grid">
+        <div class="hero-card">
+          <div class="hero-card-head"><span class="hero-card-kicker">01</span><span>Secure by default</span></div>
+          <p>Block mode, fail-closed on WAF errors, static asset bypass already wired up. Flip to <code>'detect'</code> for dry-run rollout.</p>
+        </div>
+        <div class="hero-card">
+          <div class="hero-card-head"><span class="hero-card-kicker">02</span><span>Real middleware, not a proxy</span></div>
+          <p>Runs inside your process. Access <code>req</code>/<code>res</code>, custom <code>onBlock</code>, skip routes, attach metadata — all in-band.</p>
+        </div>
+        <div class="hero-card">
+          <div class="hero-card-head"><span class="hero-card-kicker">03</span><span>Multi-core via worker_threads</span></div>
+          <p><code>createWAFPool</code> spreads CRS across CPU cores. 4.5× throughput at POOL=8 on typical hardware.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section class="doc-section" id="how-it-works">
+      <h2 class="h2">How it works</h2>
+      <p>Every adapter wraps the same engine from <code>@coraza/core</code>. At boot, the WASM module is instantiated once (or N times, in a pool) and kept warm. On each request, the adapter opens a <em>transaction</em>, sends connection + URI + headers + body to the engine in a single fused call, and gets back a pass/block verdict.</p>
+
+      <div class="lifecycle" role="img" aria-label="Request lifecycle through Coraza">
+        <div class="lc-grid">
+          <div class="lc-cell lc-cell-ingress">
+            <div class="lc-k">ingress</div>
+            <div class="lc-v">HTTP req</div>
+          </div>
+          <div class="lc-arrow">→</div>
+          <div class="lc-cell lc-cell-adapter">
+            <div class="lc-k">adapter</div>
+            <div class="lc-v">framework hook</div>
+            <div class="lc-sub">connection · uri · headers · body</div>
+          </div>
+          <div class="lc-arrow">→</div>
+          <div class="lc-cell lc-cell-engine">
+            <div class="lc-k">engine</div>
+            <div class="lc-v">coraza · wasm</div>
+            <div class="lc-sub">phase 1 + phase 2 · anomaly score</div>
+          </div>
+          <div class="lc-arrow">→</div>
+          <div class="lc-cell lc-cell-verdict">
+            <div class="lc-k">verdict</div>
+            <div class="lc-v-split">
+              <span class="lc-pass">pass</span>
+              <span class="lc-sep">/</span>
+              <span class="lc-block">block</span>
+            </div>
+          </div>
+        </div>
+        <div class="lc-tap-row">
+          <svg class="lc-tap-branch" viewBox="0 0 24 28" aria-hidden="true" preserveAspectRatio="none">
+            <path d="M12 0 V20 Q12 26 18 26 H24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 3" stroke-linecap="round"/>
+          </svg>
+          <span class="lc-tap-pill">
+            <span class="lc-k">tap</span>
+            <code>logger.warn(…)</code>
+            <span class="lc-tap-desc">→ siem · logs · metrics</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <div class="callout-badge">Note</div>
+        <div>Request phases 1 + 2 run atomically in one WASM call. This is what lets CRS's anomaly-score rule <code>949110</code> fire on body-less GET requests — a subtle fix that closed a 60% attack-miss bug on the split-phase adapter design.</div>
+      </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section class="doc-section" id="install">
+      <h2 class="h2">Install</h2>
+      <p>Pick the adapter that matches your framework. Each one depends on <code>@coraza/core</code> and <code>@coraza/coreruleset</code>.</p>
+
+      <div class="installer" id="installer">
+        <div class="installer-head">
+          <div class="installer-dots"><i></i><i></i><i></i></div>
+          <div class="installer-title">~/my-app</div>
+          <div class="installer-copy">
+            <button class="installer-copy-btn" id="installerCopyBtn" type="button" aria-label="Copy command">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              <span>copy</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="installer-frameworks" data-picker="fw" role="tablist" aria-label="Framework">
+          <button class="fw-card is-on" data-val="express" role="tab">
+            <svg class="fw-logo" viewBox="0 0 256 72" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M245.25 60.63c-7.96 2.13-13.93-.32-19.23-7.3-13.4 17.3-33.88 17.3-47.07 1.9-7.11-8.3-8.82-18.08-6.64-28.93 2.6-12.94 14.62-23.13 27.02-23.14 13.93-.01 23.55 6.78 27.29 20.23 1.2 4.32 1.13 8.98 1.6 13.6-.01 4.21-.38 8.52.8 12.65 2.74 9.6 14.02 13.22 20.35 6.4.8-.9 2.03-1.4 3.22-2.2.41 3.51.98 5.65 1.66 6.79zm-24.44-28.54c-.13-3.67-.15-6.84-.74-9.91-1.63-8.47-8.11-13.72-16.48-13.58-8.4.14-14.31 5.65-15.63 14.2-1 6.42-.04 12.82 3.9 17.85 3.85 4.9 9.36 7.02 15.78 5.08 6.52-1.97 10.84-6.7 13.17-13.64zM86.53 38.06C72.8 36 67.1 46.98 52.96 47.1c-12.96.12-23.17-10.04-23.19-23.2-.02-13.15 10.1-23.4 23.03-23.47 12.89-.07 23.02 10.03 23.33 23.42.03 1.4 0 2.8 0 4.33H34.25c.33 11.08 8.33 17.83 18.44 17.93 6.53.06 11.48-3.2 14.98-8.78 3.47-5.53 7.4-7.88 18.86-5.27zM34.43 25.23h36.46C69.8 14.16 62.82 7.84 52.35 7.9c-10.19.05-17.62 6.96-17.92 17.33zM215.87 58.67c-11.13 5.03-26.78-.09-33.1-11.22-5.5-9.68-4.85-19.85.5-29.34 4.54-8.06 11.88-11.92 21.03-12.32 9.47-.42 17.77 2.5 23.72 10.36 5.29 7.01 7.2 15.3 5.5 24.06-1.96 10.2-9.56 16.28-17.65 18.46z"/></svg>
+            <span>Express</span>
+          </button>
+          <button class="fw-card" data-val="fastify" role="tab">
+            <svg class="fw-logo" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M6 17.2l3.2-3.8 4.9.1 2.6-2.6h12.8l3 1.9 6.5-1 2.9.8-1.7 2.3-3.9 1.2v1.6l3.1 1-1.6 2.1-4.5.3-7.3 5.9h-4.6l-.5 1.1h8.1l2.3 3.4-3.7.4-1.4 1.9-3.5-1.4H10.2l-2.3-2.9.9-1.9 2.1-.9-.5-2.3 2-1.6-.9-2.6L6 17.2zm25.5-2.1l-1.3-1.1h-12l-2.2 2.2 1 .4.1 2-1.7 1.6 1.2 2.2-2.7 1.2-.2 1.1 2.3 1.4h11.4l.9-1.3 1.8.2.6-1.2h-5.6l.5-3.3 7.5-5 1.8-.2-1.1-.8V13.7l-2.3.4v1z"/></svg>
+            <span>Fastify</span>
+          </button>
+          <button class="fw-card" data-val="next" role="tab">
+            <svg class="fw-logo" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M24 4C12.95 4 4 12.95 4 24c0 8.83 5.72 16.31 13.66 18.96V19.2l16.43 23.1A20 20 0 0 0 44 24C44 12.95 35.05 4 24 4zm6.93 10.8h2.61v19.4h-2.61V14.8z"/></svg>
+            <span>Next.js</span>
+          </button>
+          <button class="fw-card" data-val="nestjs" role="tab">
+            <svg class="fw-logo" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M19.26 3.57c-.48 0-.93.1-1.34.25 2.58 1.7 2.44 5.43.07 7.26-.33.25-.3.55.09.76 2.44 1.36 5.63.96 7.8-1.22 2.38-2.4 2.38-6.27 0-8.66-.95-.96-2.1-1.4-3.21-1.4-.03 0-.07.1-.1.2 1.17 1.24 1.7 2.96 1.35 4.62-.21.98-.99 1.73-1.98 1.73-1.2 0-2.08-1.12-1.77-2.29.2-.77.11-.98-.3-1.17a2.96 2.96 0 0 0-.61-.08zM7.63 16.23c-1.66 1-3.07 2.82-3.61 5.5-1.37 6.88 2.3 13.36 9.05 17.31 1.38.8 2.65 1.4 3.9 1.84-4.8-4.33-7.3-9.4-6.9-14.5.27-3.48 1.38-6.18 3.05-8.18-1.76.13-3.6-.6-5.49-1.97zm32.27.85c-2.23 1.08-4.42 1.51-6.36 1.11.88 1.01 1.5 2.22 1.8 3.62.69 3.19-.39 6.62-2.91 9.82 5.82-2.08 9.55-5.77 10.45-10.26.32-1.61.04-3.08-.58-4.29-.8-.04-1.62-.04-2.4 0zM24.25 24.8c-.5 0-1 .1-1.46.3-2.05.9-2.9 3.42-1.8 5.36.62 1.1 1.8 1.74 3.02 1.74.5 0 1-.1 1.45-.3 2.05-.9 2.9-3.43 1.8-5.37a3.47 3.47 0 0 0-3.01-1.73z"/></svg>
+            <span>NestJS</span>
+          </button>
+        </div>
+
+        <div class="installer-terminal">
+          <div class="installer-pm" data-picker="pm" role="tablist" aria-label="Package manager">
+            <button class="pm-tab is-on" data-val="pnpm">pnpm</button>
+            <button class="pm-tab" data-val="npm">npm</button>
+            <button class="pm-tab" data-val="yarn">yarn</button>
+            <button class="pm-tab" data-val="bun">bun</button>
+          </div>
+          <div class="installer-cmdline">
+            <span class="installer-prompt">$</span>
+            <span class="installer-cmd-prefix" id="installerPrefix">pnpm add</span>
+            <span class="installer-cmd-pkg" id="installerPkg">@coraza/express</span>
+            <span class="installer-cmd-dim">@coraza/core @coraza/coreruleset</span>
+            <span class="installer-caret"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- QUICKSTART -->
+    <section class="doc-section" id="quickstart">
+      <h2 class="h2">Quick start</h2>
+      <p>Everything below uses <code>recommended()</code> from <code>@coraza/coreruleset</code>, which activates CRS with Node-appropriate defaults (PHP/Java/.NET rules excluded).</p>
+
+      <div class="tabs tabs-framework" data-tabgroup="framework">
+        <div class="tab-list" role="tablist">
+          <button class="tab" role="tab" data-tab="express" aria-selected="true"><span class="tab-dot" data-adapter="express"></span>Express</button>
+          <button class="tab" role="tab" data-tab="fastify"><span class="tab-dot" data-adapter="fastify"></span>Fastify</button>
+          <button class="tab" role="tab" data-tab="next"><span class="tab-dot" data-adapter="next"></span>Next.js</button>
+          <button class="tab" role="tab" data-tab="nestjs"><span class="tab-dot" data-adapter="nestjs"></span>NestJS</button>
+        </div>
+
+        <div class="tab-panel" data-tab="express"><pre class="code"><code><span class="c-k">import</span> express <span class="c-k">from</span> <span class="c-s">'express'</span>
+<span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+<span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/express'</span>
+<span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
+
+<span class="c-k">const</span> app = <span class="c-f">express</span>()
+app.<span class="c-f">use</span>(express.<span class="c-f">json</span>())
+
+<span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> })
+app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf }))
+
+app.<span class="c-f">get</span>(<span class="c-s">'/'</span>, (_req, res) =&gt; res.<span class="c-f">json</span>({ ok: <span class="c-n">true</span> }))
+app.<span class="c-f">listen</span>(<span class="c-n">3000</span>)</code></pre></div>
+
+        <div class="tab-panel" data-tab="fastify" hidden><pre class="code"><code><span class="c-k">import</span> Fastify <span class="c-k">from</span> <span class="c-s">'fastify'</span>
+<span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+<span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/fastify'</span>
+<span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
+
+<span class="c-k">const</span> app = <span class="c-f">Fastify</span>()
+<span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> })
+
+<span class="c-k">await</span> app.<span class="c-f">register</span>(coraza, { waf })
+app.<span class="c-f">get</span>(<span class="c-s">'/'</span>, <span class="c-k">async</span> () =&gt; ({ ok: <span class="c-n">true</span> }))
+<span class="c-k">await</span> app.<span class="c-f">listen</span>({ port: <span class="c-n">3000</span> })</code></pre></div>
+
+        <div class="tab-panel" data-tab="next" hidden><pre class="code"><code><span class="c-c">// middleware.ts</span>
+<span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+<span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/next'</span>
+<span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
+
+<span class="c-k">const</span> wafPromise = <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> })
+<span class="c-k">export const</span> middleware = <span class="c-f">coraza</span>({ waf: wafPromise })
+
+<span class="c-k">export const</span> config = {
+  matcher: <span class="c-s">'/:path*'</span>,
+  runtime: <span class="c-s">'nodejs'</span>,
+}</code></pre></div>
+
+        <div class="tab-panel" data-tab="nestjs" hidden><pre class="code"><code><span class="c-c">// app.module.ts</span>
+<span class="c-k">import</span> { Module } <span class="c-k">from</span> <span class="c-s">'@nestjs/common'</span>
+<span class="c-k">import</span> { CorazaModule } <span class="c-k">from</span> <span class="c-s">'@coraza/nestjs'</span>
+<span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
+
+<span class="c-k">@Module</span>({
+  imports: [
+    CorazaModule.<span class="c-f">forRoot</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> }),
+  ],
+})
+<span class="c-k">export class</span> AppModule {}</code></pre></div>
+      </div>
+
+      <div class="callout callout-dim">
+        <div class="callout-badge">Scale</div>
+        <div>For multi-core throughput, swap <code>createWAF</code> for <code>createWAFPool</code>. Same config + one extra field (<code>size</code>). Typical gain: 4.5× RPS on an 8-core box.</div>
+      </div>
+    </section>
+
+    <!-- API REFERENCE: CORE -->
+    <section class="doc-section" id="api-core">
+      <div class="api-head">
+        <span class="api-kicker">Reference</span>
+        <h2 class="h2">@coraza/core</h2>
+        <p class="api-sub">The framework-agnostic engine. Every adapter calls into this.</p>
+      </div>
+
+      <article class="api-item" id="core-create">
+        <header class="api-item-head">
+          <h3 class="h3"><code>createWAF(config)</code></h3>
+          <span class="api-tag api-tag-async">async</span>
+          <span class="api-tag">factory</span>
+        </header>
+        <p>Loads the Coraza WASM, compiles the provided SecLang directives, and returns a long-lived <code>WAF</code> instance. Call once at boot and reuse across requests.</p>
+
+        <details class="sig" open>
+          <summary><span class="sig-toggle">signature</span></summary>
+<pre class="code"><code><span class="c-k">function</span> <span class="c-f">createWAF</span>(config: WAFConfig): Promise&lt;WAF&gt;
+
+<span class="c-k">interface</span> WAFConfig {
+  <span class="c-c">/** SecLang directives. Usually recommended() from @coraza/coreruleset. */</span>
+  rules: <span class="c-k">string</span>
+  <span class="c-c">/** 'detect' logs matches; 'block' denies on interruption. Default 'detect'. */</span>
+  mode?: <span class="c-s">'detect'</span> | <span class="c-s">'block'</span>
+  <span class="c-c">/** Custom logger. Defaults to console. */</span>
+  logger?: Logger
+  <span class="c-c">/** Override the embedded WASM binary (tests / custom builds). */</span>
+  wasmSource?: ArrayBufferLike | Uint8Array | URL | <span class="c-k">string</span>
+}</code></pre>
+        </details>
+
+        <h4 class="h4">Example</h4>
+<pre class="code"><code><span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+<span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
+
+<span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAF</span>({
+  rules: <span class="c-f">recommended</span>({
+    paranoia: <span class="c-n">1</span>,
+    excludeCategories: [<span class="c-s">'scanner-detection'</span>, <span class="c-s">'dos-protection'</span>],
+  }),
+  mode: <span class="c-s">'block'</span>,
+})</code></pre>
+      </article>
+
+      <article class="api-item" id="core-pool">
+        <header class="api-item-head">
+          <h3 class="h3"><code>createWAFPool(config)</code></h3>
+          <span class="api-tag api-tag-async">async</span>
+          <span class="api-tag">factory</span>
+        </header>
+        <p>Same config as <code>createWAF</code>, plus <code>size</code> — spawns N worker_threads each holding a WAF. Round-robins least-busy. Same adapter API; pass the pool where you'd pass a <code>WAF</code>.</p>
+
+        <details class="sig" open>
+          <summary><span class="sig-toggle">signature</span></summary>
+<pre class="code"><code><span class="c-k">function</span> <span class="c-f">createWAFPool</span>(config: WAFPoolOptions): Promise&lt;WAFPool&gt;
+
+<span class="c-k">interface</span> WAFPoolOptions <span class="c-k">extends</span> WAFConfig {
+  <span class="c-c">/** Worker count. Default os.availableParallelism(). */</span>
+  size?: <span class="c-k">number</span>
+}</code></pre>
+        </details>
+
+        <h4 class="h4">Example</h4>
+<pre class="code"><code><span class="c-k">import</span> os <span class="c-k">from</span> <span class="c-s">'node:os'</span>
+<span class="c-k">import</span> { createWAFPool } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+
+<span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAFPool</span>({
+  rules: <span class="c-f">recommended</span>(),
+  mode: <span class="c-s">'block'</span>,
+  size: os.<span class="c-f">availableParallelism</span>(),
+})</code></pre>
+      </article>
+
+      <article class="api-item" id="core-transaction">
+        <header class="api-item-head">
+          <h3 class="h3"><code>Transaction</code></h3>
+          <span class="api-tag">type</span>
+        </header>
+        <p>Per-request handle opened via <code>waf.newTransaction()</code>. Adapters use this internally; reach for it only when writing a custom adapter. Request phases 1 + 2 run atomically via <code>processRequestBundle</code>.</p>
+
+        <details class="sig">
+          <summary><span class="sig-toggle">signature</span></summary>
+<pre class="code"><code><span class="c-k">interface</span> Transaction {
+  <span class="c-c">/** Run phases 1+2 atomically in one WASM call. Preferred entrypoint. */</span>
+  <span class="c-f">processRequestBundle</span>(req: RequestInfo, body?: Uint8Array | <span class="c-k">string</span>): <span class="c-k">boolean</span>
+
+  <span class="c-c">/** Response phase (only when adapter.inspectResponse=true). */</span>
+  <span class="c-f">processResponse</span>(res: ResponseInfo): <span class="c-k">boolean</span>
+  <span class="c-f">processResponseBody</span>(body?: Uint8Array | <span class="c-k">string</span>): <span class="c-k">boolean</span>
+
+  <span class="c-f">interruption</span>(): Interruption | <span class="c-k">null</span>
+  <span class="c-f">matchedRules</span>(): MatchedRule[]
+
+  <span class="c-c">/** Short-circuit predicates — check these before ingesting data. */</span>
+  <span class="c-f">isRuleEngineOff</span>(): <span class="c-k">boolean</span>
+  <span class="c-f">isRequestBodyAccessible</span>(): <span class="c-k">boolean</span>
+  <span class="c-f">isResponseBodyProcessable</span>(): <span class="c-k">boolean</span>
+
+  <span class="c-f">processLogging</span>(): <span class="c-k">void</span>
+  <span class="c-f">close</span>(): <span class="c-k">void</span>
+}
+
+<span class="c-k">interface</span> Interruption {
+  ruleId: <span class="c-k">number</span>
+  action: <span class="c-k">string</span>    <span class="c-c">// 'deny' | 'drop' | ...</span>
+  status: <span class="c-k">number</span>
+  data: <span class="c-k">string</span>
+}</code></pre>
+        </details>
+      </article>
+    </section>
+
+    <!-- CORERULESET -->
+    <section class="doc-section" id="api-coreruleset">
+      <div class="api-head">
+        <span class="api-kicker">Reference</span>
+        <h2 class="h2">@coraza/coreruleset</h2>
+        <p class="api-sub">Presets and tuning knobs for OWASP CRS. Emit SecLang; pass to <code>createWAF</code>.</p>
+      </div>
+
+      <div class="preset-grid">
+        <div class="preset">
+          <div class="preset-name"><code>recommended(options?)</code></div>
+          <div class="preset-desc">CRS in blocking mode, paranoia 1. Excludes php/java/dotnet rules (keeps nodejs + generic). Good default.</div>
+        </div>
+        <div class="preset">
+          <div class="preset-name"><code>balanced(options?)</code></div>
+          <div class="preset-desc">Alias for <code>recommended</code>. Explicit name for the paranoia-1 baseline.</div>
+        </div>
+        <div class="preset">
+          <div class="preset-name"><code>strict(options?)</code></div>
+          <div class="preset-desc">Paranoia 2 + tighter inbound threshold (3). More catches, more false positives.</div>
+        </div>
+        <div class="preset">
+          <div class="preset-name"><code>permissive(options?)</code></div>
+          <div class="preset-desc">Paranoia 1, looser thresholds, non-blocking on anomaly. Staged rollout.</div>
+        </div>
+        <div class="preset">
+          <div class="preset-name"><code>excludeCategory(cat)</code></div>
+          <div class="preset-desc">Emit a single <code>SecRuleRemoveById</code> for one of 20 categories (scanner-detection, dos-protection, xss, sqli, etc.).</div>
+        </div>
+        <div class="preset">
+          <div class="preset-name"><code>excludeByTag(tags)</code></div>
+          <div class="preset-desc">Low-level escape hatch: emit raw <code>SecRuleRemoveByTag</code> lines.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ADAPTER: EXPRESS -->
+    <section class="doc-section adapter-section" id="api-express" data-adapter="express">
+      <div class="adapter-head">
+        <span class="adapter-chip">adapter</span>
+        <h2 class="h2">Express · <code>@coraza/express</code></h2>
+        <p class="adapter-sub">Drop-in middleware. Works with Express 4 and 5.</p>
+      </div>
+
+      <article class="api-item">
+        <header class="api-item-head">
+          <h3 class="h3"><code>coraza(options)</code></h3>
+          <span class="api-tag">middleware</span>
+        </header>
+        <p>Returns a <code>RequestHandler</code>. Takes a pre-built <code>WAF</code> (or <code>WAFPool</code>) so construction happens once at boot and the middleware stays sync-to-mount.</p>
+
+        <details class="sig" open>
+          <summary><span class="sig-toggle">signature</span></summary>
+<pre class="code"><code><span class="c-k">function</span> <span class="c-f">coraza</span>(options: CorazaExpressOptions): RequestHandler
+
+<span class="c-k">interface</span> CorazaExpressOptions {
+  <span class="c-c">/** Built via createWAF / createWAFPool. */</span>
+  waf: WAF | WAFPool
+  <span class="c-c">/** Custom block response. Default: 403 text/plain with rule id. */</span>
+  onBlock?: (i: Interruption, req: Request, res: Response) =&gt; <span class="c-k">void</span>
+  <span class="c-c">/** Run response-phase rules too. Default false. */</span>
+  inspectResponse?: <span class="c-k">boolean</span>
+  <span class="c-c">/** Bypass WAF for static/media paths. Defaults are safe; see skip.ts. */</span>
+  skip?: SkipOptions | <span class="c-k">false</span>
+  <span class="c-c">/** WAF error behavior. Default 'block' — fail-closed. */</span>
+  onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
+}</code></pre>
+        </details>
+
+        <h4 class="h4">Example — custom block handler + pool</h4>
+<pre class="code"><code><span class="c-k">import</span> { createWAFPool } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+<span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/express'</span>
+
+<span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAFPool</span>({
+  rules: <span class="c-f">recommended</span>(),
+  mode: <span class="c-s">'block'</span>,
+  size: <span class="c-n">8</span>,
+})
+
+app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({
+  waf,
+  skip: { prefixes: [<span class="c-s">'/health'</span>, <span class="c-s">'/metrics'</span>] },
+  onBlock(it, req, res) {
+    metrics.<span class="c-f">inc</span>(<span class="c-s">'waf.blocked'</span>, { ruleId: it.ruleId })
+    res.<span class="c-f">status</span>(it.status || <span class="c-n">403</span>).<span class="c-f">json</span>({
+      error: <span class="c-s">'forbidden'</span>,
+      ruleId: it.ruleId,
+      traceId: req.headers[<span class="c-s">'x-trace-id'</span>],
+    })
+  },
+}))</code></pre>
+      </article>
+    </section>
+
+    <!-- ADAPTER: FASTIFY -->
+    <section class="doc-section adapter-section" id="api-fastify" data-adapter="fastify">
+      <div class="adapter-head">
+        <span class="adapter-chip">adapter</span>
+        <h2 class="h2">Fastify · <code>@coraza/fastify</code></h2>
+        <p class="adapter-sub">First-class Fastify plugin. Uses <code>preHandler</code> so req.body is in hand for phases 1+2 atomic.</p>
+      </div>
+
+      <article class="api-item">
+        <header class="api-item-head">
+          <h3 class="h3"><code>fastify.register(coraza, options)</code></h3>
+          <span class="api-tag">plugin</span>
+        </header>
+        <p>Encapsulatable — register inside a scope to protect a subset of routes. Forwards block logs through <code>request.log</code> (Pino by default).</p>
+
+        <details class="sig" open>
+          <summary><span class="sig-toggle">signature</span></summary>
+<pre class="code"><code><span class="c-k">const</span> coraza: FastifyPluginAsync&lt;CorazaFastifyOptions&gt;
+
+<span class="c-k">interface</span> CorazaFastifyOptions {
+  waf: WAF | WAFPool
+  onBlock?: (i: Interruption, req: FastifyRequest, reply: FastifyReply) =&gt; <span class="c-k">void</span> | Promise&lt;<span class="c-k">void</span>&gt;
+  inspectResponse?: <span class="c-k">boolean</span>
+  skip?: SkipOptions | <span class="c-k">false</span>
+  onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
+}</code></pre>
+        </details>
+
+        <h4 class="h4">Example — scoped to /api</h4>
+<pre class="code"><code><span class="c-k">import</span> Fastify <span class="c-k">from</span> <span class="c-s">'fastify'</span>
+<span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+<span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/fastify'</span>
+
+<span class="c-k">const</span> app = <span class="c-f">Fastify</span>({ logger: <span class="c-n">true</span> })
+<span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> })
+
+app.<span class="c-f">register</span>(<span class="c-k">async</span> (api) =&gt; {
+  <span class="c-k">await</span> api.<span class="c-f">register</span>(coraza, {
+    waf,
+    onBlock(it, req, reply) {
+      req.log.<span class="c-f">warn</span>({ it }, <span class="c-s">'waf_block'</span>)
+      reply.<span class="c-f">code</span>(it.status || <span class="c-n">403</span>).<span class="c-f">send</span>({ error: <span class="c-s">'forbidden'</span> })
+    },
+  })
+}, { prefix: <span class="c-s">'/api'</span> })</code></pre>
+      </article>
+    </section>
+
+    <!-- ADAPTER: NEXT -->
+    <section class="doc-section adapter-section" id="api-next" data-adapter="next">
+      <div class="adapter-head">
+        <span class="adapter-chip">adapter</span>
+        <h2 class="h2">Next.js · <code>@coraza/next</code></h2>
+        <p class="adapter-sub">Middleware for the Node runtime (Edge runtime lacks WASI). App Router and Pages Router.</p>
+      </div>
+
+      <article class="api-item">
+        <header class="api-item-head">
+          <h3 class="h3"><code>coraza(options)</code></h3>
+          <span class="api-tag">middleware</span>
+        </header>
+        <p>Returns a Next <code>middleware</code> export. Accepts either a built <code>WAF</code> / <code>WAFPool</code> or a promise of one — useful for deferring WASM compile in CJS setups without top-level await.</p>
+
+        <details class="sig" open>
+          <summary><span class="sig-toggle">signature</span></summary>
+<pre class="code"><code><span class="c-k">function</span> <span class="c-f">coraza</span>(options: CorazaNextOptions): NextMiddleware
+
+<span class="c-k">interface</span> CorazaNextOptions {
+  waf: WAF | WAFPool | Promise&lt;WAF | WAFPool&gt;
+  onBlock?: (i: Interruption, req: NextRequest) =&gt; Response
+  skip?: SkipOptions | <span class="c-k">false</span>
+  onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
+}</code></pre>
+        </details>
+
+        <h4 class="h4">Example — middleware.ts</h4>
+<pre class="code"><code><span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+<span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/next'</span>
+<span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
+<span class="c-k">import</span> { NextResponse } <span class="c-k">from</span> <span class="c-s">'next/server'</span>
+
+<span class="c-k">const</span> waf = <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> })
+
+<span class="c-k">export const</span> middleware = <span class="c-f">coraza</span>({
+  waf,
+  onBlock(it) {
+    <span class="c-k">return</span> NextResponse.<span class="c-f">json</span>(
+      { error: <span class="c-s">'forbidden'</span>, ruleId: it.ruleId },
+      { status: it.status || <span class="c-n">403</span> },
+    )
+  },
+})
+
+<span class="c-k">export const</span> config = {
+  matcher: [<span class="c-s">'/((?!_next/static|_next/image|favicon.ico).*)'</span>],
+  runtime: <span class="c-s">'nodejs'</span>,
+}</code></pre>
+      </article>
+    </section>
+
+    <!-- ADAPTER: NEST -->
+    <section class="doc-section adapter-section" id="api-nestjs" data-adapter="nestjs">
+      <div class="adapter-head">
+        <span class="adapter-chip">adapter</span>
+        <h2 class="h2">NestJS · <code>@coraza/nestjs</code></h2>
+        <p class="adapter-sub">Module + guard. Works with Express and Fastify platforms.</p>
+      </div>
+
+      <article class="api-item">
+        <header class="api-item-head">
+          <h3 class="h3"><code>CorazaModule.forRoot(options)</code></h3>
+          <span class="api-tag">module</span>
+        </header>
+        <p>Import into your root module. Registers <code>CorazaGuard</code> as <code>APP_GUARD</code> by default so every route is protected; opt out with <code>globalGuard: false</code> and apply <code>@UseGuards(CorazaGuard)</code> selectively.</p>
+
+        <details class="sig" open>
+          <summary><span class="sig-toggle">signature</span></summary>
+<pre class="code"><code><span class="c-k">class</span> CorazaModule {
+  <span class="c-k">static</span> <span class="c-f">forRoot</span>(options: CorazaNestOptions): DynamicModule
+  <span class="c-k">static</span> <span class="c-f">forRootAsync</span>(options: CorazaNestAsyncOptions): DynamicModule
+}
+
+<span class="c-k">interface</span> CorazaNestOptions <span class="c-k">extends</span> WAFConfig {
+  globalGuard?: <span class="c-k">boolean</span>           <span class="c-c">// default true</span>
+  skip?: SkipOptions | <span class="c-k">false</span>
+  onBlock?: (i: Interruption) =&gt; HttpException
+  onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
+}</code></pre>
+        </details>
+
+        <h4 class="h4">Example — opt-in per route</h4>
+<pre class="code"><code><span class="c-k">import</span> { Controller, Get, UseGuards } <span class="c-k">from</span> <span class="c-s">'@nestjs/common'</span>
+<span class="c-k">import</span> { CorazaGuard } <span class="c-k">from</span> <span class="c-s">'@coraza/nestjs'</span>
+
+<span class="c-k">@Controller</span>(<span class="c-s">'billing'</span>)
+<span class="c-k">export class</span> BillingController {
+  <span class="c-k">@UseGuards</span>(CorazaGuard)
+  <span class="c-k">@Get</span>(<span class="c-s">'invoice'</span>)
+  <span class="c-f">invoice</span>() {
+    <span class="c-k">return</span> { ok: <span class="c-n">true</span> }
+  }
+}</code></pre>
+      </article>
+    </section>
+
+    <!-- RECIPES -->
+    <section class="doc-section" id="recipes">
+      <h2 class="h2">Recipes</h2>
+
+      <div class="recipe">
+        <h3 class="h3">Staged rollout with detect-only</h3>
+        <p>Enable CRS in detect mode, log, watch for false positives, then flip to block. Same ruleset both ways.</p>
+<pre class="code"><code><span class="c-k">const</span> mode = process.env.WAF_MODE === <span class="c-s">'enforce'</span> ? <span class="c-s">'block'</span> : <span class="c-s">'detect'</span>
+<span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode })
+app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf }))</code></pre>
+      </div>
+
+      <div class="recipe">
+        <h3 class="h3">Trim CRS for Node-only APIs</h3>
+        <p>Drop rule categories that don't apply to your workload. Keeps the core attack detection active; skips scanner-fingerprinting and rate-limit rules.</p>
+<pre class="code"><code><span class="c-k">const</span> waf = <span class="c-k">await</span> <span class="c-f">createWAFPool</span>({
+  rules: <span class="c-f">recommended</span>({
+    excludeCategories: [
+      <span class="c-s">'scanner-detection'</span>,
+      <span class="c-s">'dos-protection'</span>,      <span class="c-c">// do rate limits upstream</span>
+      <span class="c-s">'outbound-data-leak'</span>,   <span class="c-c">// only matters with inspectResponse</span>
+    ],
+  }),
+  mode: <span class="c-s">'block'</span>,
+  size: os.<span class="c-f">availableParallelism</span>(),
+})</code></pre>
+      </div>
+
+      <div class="recipe">
+        <h3 class="h3">Fail-open for availability-critical endpoints</h3>
+        <p>By default, a WAF crash returns 503. If you run a critical endpoint where a correctness/availability trade-off favors availability, flip <code>onWAFError</code>.</p>
+<pre class="code"><code><span class="c-c">// NOT recommended for endpoints exposed to the public internet.</span>
+<span class="c-c">// See docs/security.md before enabling.</span>
+app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFError: <span class="c-s">'allow'</span> }))</code></pre>
+      </div>
+    </section>
+
+    <!-- SECURITY -->
+    <section class="doc-section" id="security">
+      <h2 class="h2">Security</h2>
+      <p>This is a WAF — correctness beats throughput, always. The adapter defaults are chosen accordingly:</p>
+
+      <table class="err-table">
+        <thead><tr><th>Default</th><th>Behavior</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>mode</code></td>
+            <td>detect</td>
+            <td>Safer first-run — log before you block. Flip to 'block' after tuning.</td>
+          </tr>
+          <tr>
+            <td><code>onWAFError</code></td>
+            <td>block (503)</td>
+            <td>A WAF crash must not become a bypass. Opt into 'allow' explicitly.</td>
+          </tr>
+          <tr>
+            <td>phase evaluation</td>
+            <td>atomic bundle</td>
+            <td>Phases 1+2 run in one WASM call. Split-phase invites a 60% attack-miss bug on body-less requests (historical — fixed).</td>
+          </tr>
+          <tr>
+            <td>oversized fields</td>
+            <td>clip, not throw</td>
+            <td>Throwing into the adapter catch historically bypassed the WAF. Now fields clip at the UTF-8 boundary.</td>
+          </tr>
+          <tr>
+            <td><code>skip</code></td>
+            <td>/_next/static, /public/, images, fonts, …</td>
+            <td>Static assets have no user input — evaluating them is pure cost. Customize via <code>skip.prefixes</code> / <code>skip.extensions</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <div class="callout-badge">Known caveats</div>
+        <div>
+          Full threat model + caveats (ReDoS via V8 Irregexp, Unicode case-insensitive, UTF-8 encoding, rxprefilter accuracy) are in
+          <a href="https://github.com/jptosso/coraza-node/blob/main/docs/security.md">docs/security.md</a>.
+          Escape hatch: <code>CORAZA_HOST_RX=off</code> forces every <code>@rx</code> pattern through Go's linear-time regex
+          instead of V8's backtracking engine.
+        </div>
+      </div>
+    </section>
+
+    <!-- PERFORMANCE -->
+    <section class="doc-section" id="perf">
+      <h2 class="h2">Performance</h2>
+      <p>Bench: k6 mixed traffic (50 VUs, 20 s, ~5% attacks), POOL=8, TinyGo WASM, full CRS. Your numbers will vary; ratios should hold.</p>
+
+      <div class="perf-grid">
+        <div class="perf-card">
+          <div class="perf-num">4.8k<span class="perf-unit">rps</span></div>
+          <div class="perf-label">POOL=8 · full CRS</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-num">37<span class="perf-unit">ms</span></div>
+          <div class="perf-label">p99 · blocks + passes</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-num">100<span class="perf-unit">%</span></div>
+          <div class="perf-label">attack block rate</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-num">170<span class="perf-unit">ms</span></div>
+          <div class="perf-label">WAF boot</div>
+        </div>
+      </div>
+
+      <div class="callout callout-dim">
+        <div class="callout-badge">Tip</div>
+        <div>Biggest lever: <code>createWAFPool</code> with <code>size = os.availableParallelism()</code>. 4.5× gain vs single WAF. Second: trim CRS categories you don't need (<code>excludeCategories</code>). Full matrix + dead-end paths: <a href="https://github.com/jptosso/coraza-node/blob/main/docs/performance.md">docs/performance.md</a>.</div>
+      </div>
+    </section>
+
+    <footer class="doc-footer">
+      <div class="foot-row">
+        <div>
+          <div class="foot-title">coraza-node</div>
+          <div class="foot-sub">Apache-2.0 · v0.1.0 · built for engineers.</div>
+        </div>
+        <div class="foot-links">
+          <a href="#overview">Top ↑</a>
+          <a href="https://github.com/jptosso/coraza-node" rel="noopener">GitHub</a>
+          <a href="https://coreruleset.org" rel="noopener">CRS</a>
+        </div>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<!-- ============== CMD+K PALETTE ============== -->
+<div class="cmdk" id="cmdk" hidden>
+  <div class="cmdk-backdrop" data-close></div>
+  <div class="cmdk-panel" role="dialog" aria-label="Search">
+    <div class="cmdk-input-row">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="cmdkInput" placeholder="Search docs, APIs, options…" autocomplete="off" />
+      <kbd>esc</kbd>
+    </div>
+    <div class="cmdk-results" id="cmdkResults"></div>
+    <div class="cmdk-footer">
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> select</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const TWEAK_DEFAULTS = {
+  "accent": "#3b82f6",
+  "density": "comfy",
+  "theme": "auto",
+  "font": "sans"
+};
+</script>
+<script src="app.js"></script>
+</body>
+</html>

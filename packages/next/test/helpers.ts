@@ -1,4 +1,5 @@
-import { Abi, WAF, silentLogger, type Mode } from '@coraza/core'
+import { WAF, silentLogger, type Mode } from '@coraza/core'
+import { Abi } from '@coraza/core/internal'
 import { createMock, type MockOptions } from '../../core/test/mockAbi.js'
 
 export function mockWAF(mode: Mode = 'block', opts: MockOptions = {}): {
