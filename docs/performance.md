@@ -10,18 +10,37 @@ Attacks comprise ~5% of the traffic. Express adapter, POOL=8 unless noted.
 
 ## Headline numbers
 
-| Config | RPS | p95 (ms) | p99 (ms) | Boot (ms) | Binary size |
-|---|---:|---:|---:|---:|---:|
-| WAF off (baseline) | 11,601 | 4.0 | 5.4 | n/a | n/a |
-| WAF on, **single WAF**, TinyGo + full CRS | 1,061 | 48.3 | 61.9 | ~170 | 3.5 MB |
-| WAF on, **POOL=4**, TinyGo + full CRS | 3,373 | 23.7 | 36.2 | ~170 | 3.5 MB |
-| WAF on, **POOL=8**, TinyGo + full CRS | **4,616** | 28.0 | 43.9 | ~170 | 3.5 MB |
-| WAF on, POOL=16, TinyGo + full CRS | 4,900 | 47.6 | 81.5 | ~170 | 3.5 MB |
-| WAF on, POOL=8, minimal WASI shim | 4,542 | 28.7 | 44.7 | ~180 | 3.5 MB |
-| WAF on, POOL=8, **std Go wasip1 + wasilibs** | 953 | 170.9 | 318.5 | ~39,000 | 27 MB |
+All rows POOL=8, TinyGo WASM, k6 mixed traffic (50 VUs, 20 s, ~5% attacks).
 
-**Takeaway**: the TinyGo build at POOL=8 is the current best. Beyond that,
-rule tuning (see below) is the next lever.
+| Config | RPS | p95 (ms) | p99 (ms) | Blocked / ~total attacks | Notes |
+|---|---:|---:|---:|---:|---|
+| WAF off | 11,601 | 4.0 | 5.4 | — | baseline |
+| + full CRS, single WAF | 1,061 | 48.3 | 61.9 | — | 11× slowdown |
+| + POOL=4 | 3,373 | 23.7 | 36.2 | 1,373 / 3,362 | — |
+| + POOL=8 | 4,616 | 28.0 | 43.9 | 1,776 / 4,614 | — |
+| + host-regex (V8 via import) | 4,796 | 26.2 | 38.3 | 1,886 / 4,773 | +4% rps, -13% p99 |
+| + rxprefilter (AST skip) | 4,788 | 25.0 | 35.1 | 1,867 / 4,715 | -20% p99 vs POOL=8 |
+| + prewarm (JIT preheat) | 4,722 | 25.5 | 35.9 | 1,940 / 4,775 | cold-start only |
+| + **batch-phases (fused call)** | **4,857** | 26.2 | 37.4 | **4,943 / 4,943** | **see note below** |
+
+### ⚠ batch-phases fixed an attack-escape
+
+Before `exp/batch-phases` merged, we were **missing ~60% of attack
+requests**. CRS's anomaly-score evaluator (rule `949110`, deny at
+threshold) fires at phase 2. When `processRequest` / `processRequestBody`
+were separate WASM calls, GET requests with SQLi in the query string
+never ran phase 2 (no body to process), so the anomaly block never
+triggered. The fused bundle always runs phase 2 (even with empty body),
+matching Coraza's intended flow.
+
+**If you're on an older build, upgrade** — the attack-detection-rate
+improvement is the headline, not the +1.4% RPS bump.
+
+### Std Go wasip1 + wasilibs (abandoned branch)
+
+One-off measurement: `std Go wasip1 -buildmode=c-shared + wasilibs` →
+**953 rps, p99 318 ms, 39-second boot, 27 MB binary**. 5× slower than
+TinyGo. See `exp/go-wasi` branch for the full failed attempt.
 
 ## What was tried and rejected
 
