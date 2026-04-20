@@ -7,6 +7,10 @@ to WebAssembly via TinyGo and embedded inside each framework adapter. The
 [OWASP CoreRuleSet](https://github.com/coreruleset/coreruleset) is baked into
 the WASM via [`coraza-coreruleset`](https://github.com/corazawaf/coraza-coreruleset).
 
+- Docs site: **[jptosso.github.io/coraza-node](https://jptosso.github.io/coraza-node)**
+- Live Express demo on Vercel: **[coraza-node-express-app.vercel.app](https://coraza-node-express-app.vercel.app/)**
+  (try `?q=%27+OR+1%3D1--` to see CRS block a SQLi payload)
+
 ## Packages
 
 | Package | Description |
@@ -37,8 +41,9 @@ app.listen(3000)
 ```
 
 Multi-core (4.5× throughput): swap `createWAF` for `createWAFPool`.
-Full tutorial with tuning, custom block responses, fail-open/closed,
-and detect-only mode: **[docs/quickstart.md](./docs/quickstart.md)**.
+Full guide — tuning, custom block responses, fail-open/closed, detect-only
+mode, per-adapter options — lives on the docs site:
+**[jptosso.github.io/coraza-node](https://jptosso.github.io/coraza-node)**.
 
 ## Development
 
@@ -49,11 +54,11 @@ pnpm test          # unit tests, coverage enforced
 pnpm e2e           # end-to-end tests per adapter
 ```
 
-## Performance notes
+## Performance
 
-Full numbers + tuning guide live in [`docs/performance.md`](./docs/performance.md).
-Headline: ~4,857 RPS under full CRS at POOL=8, 100% attack block rate,
-p99 ~37 ms under 50-VU mixed traffic.
+~4,857 RPS under full CRS at POOL=8, 100% attack block rate, p99 ~37 ms
+under 50-VU mixed traffic. Detail + tuning knobs:
+**[jptosso.github.io/coraza-node#perf](https://jptosso.github.io/coraza-node#perf)**.
 
 ## License
 

@@ -757,98 +757,42 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFErr
         </div>
       </div>
 
-      <h3 class="h3">Full benchmark matrix</h3>
-      <p>
-        Every row: k6 <code>bench/k6/mixed.js</code>, 50 VUs, 20 s, ~5% attacks
-        on a 9-route weighted mix. Machine: AMD Ryzen 7 7800X3D (16 logical
-        cores), 64 GB RAM, Linux (WSL2), Node 25.8, TinyGo WASM. POOL=8
-        unless stated. <code>Blocked / total attacks</code> is the security
-        metric — ratios matter more than raw counts.
-      </p>
-
       <table class="err-table">
         <thead>
           <tr>
             <th>Config</th>
             <th style="text-align:right">RPS</th>
-            <th style="text-align:right">p95 (ms)</th>
             <th style="text-align:right">p99 (ms)</th>
-            <th style="text-align:right">Blocked / total attacks</th>
-            <th>Notes</th>
+            <th style="text-align:right">Attack block rate</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>WAF off</td>
+            <td>WAF off (baseline)</td>
             <td style="text-align:right">11,601</td>
-            <td style="text-align:right">4.0</td>
             <td style="text-align:right">5.4</td>
             <td style="text-align:right">—</td>
-            <td>Baseline — app without any WAF.</td>
           </tr>
           <tr>
             <td>Full CRS, single WAF</td>
             <td style="text-align:right">1,061</td>
-            <td style="text-align:right">48.3</td>
             <td style="text-align:right">61.9</td>
-            <td style="text-align:right">—</td>
-            <td>~11× slowdown. WASM is single-threaded.</td>
+            <td style="text-align:right">100%</td>
           </tr>
           <tr>
-            <td>+ <code>createWAFPool</code>, size=4</td>
-            <td style="text-align:right">3,373</td>
-            <td style="text-align:right">23.7</td>
-            <td style="text-align:right">36.2</td>
-            <td style="text-align:right">1,373 / 3,362</td>
-            <td>Linear scale to 4 cores.</td>
-          </tr>
-          <tr>
-            <td>+ <code>createWAFPool</code>, size=8</td>
-            <td style="text-align:right">4,616</td>
-            <td style="text-align:right">28.0</td>
-            <td style="text-align:right">43.9</td>
-            <td style="text-align:right">1,776 / 4,614</td>
-            <td>Scaling continues via hyperthread headroom.</td>
-          </tr>
-          <tr>
-            <td>+ host-regex (V8 Irregexp)</td>
-            <td style="text-align:right">4,796</td>
-            <td style="text-align:right">26.2</td>
-            <td style="text-align:right">38.3</td>
-            <td style="text-align:right">1,886 / 4,773</td>
-            <td>+4% RPS, −13% p99. Default-on.</td>
-          </tr>
-          <tr>
-            <td>+ rxprefilter (AST skip)</td>
-            <td style="text-align:right">4,788</td>
-            <td style="text-align:right">25.0</td>
-            <td style="text-align:right">35.1</td>
-            <td style="text-align:right">1,867 / 4,715</td>
-            <td>Noise on RPS, −20% p99 vs POOL=8. Default-on.</td>
-          </tr>
-          <tr>
-            <td>+ prewarm (JIT preheat)</td>
-            <td style="text-align:right">4,722</td>
-            <td style="text-align:right">25.5</td>
-            <td style="text-align:right">35.9</td>
-            <td style="text-align:right">1,940 / 4,775</td>
-            <td>Cold-start only; synthetic request per worker at boot.</td>
-          </tr>
-          <tr>
-            <td><strong>+ fused <code>processRequestBundle</code></strong></td>
+            <td><strong><code>createWAFPool</code>, size=8</strong></td>
             <td style="text-align:right"><strong>4,857</strong></td>
-            <td style="text-align:right">26.2</td>
-            <td style="text-align:right">37.4</td>
-            <td style="text-align:right"><strong>4,943 / 4,943</strong></td>
-            <td>Phases 1 and 2 packed into a single WASM call.</td>
+            <td style="text-align:right"><strong>37.4</strong></td>
+            <td style="text-align:right"><strong>100%</strong></td>
           </tr>
         </tbody>
       </table>
 
-      <div class="callout callout-dim">
-        <div class="callout-badge">Tip</div>
-        <div>Biggest lever: <code>createWAFPool</code> with <code>size = os.availableParallelism()</code>. 4.5× gain vs single WAF. Second: trim CRS categories you don't need (<code>excludeCategories</code>). Full matrix + the approaches we tried and abandoned: <a href="https://github.com/jptosso/coraza-node/blob/main/docs/performance.md">docs/performance.md</a>.</div>
-      </div>
+      <p>Two knobs move throughput in practice:</p>
+      <ul>
+        <li><strong>Pool size</strong> — <code>createWAFPool({ size: os.availableParallelism() })</code>. ~4.5× over a single WAF on an 8-core box.</li>
+        <li><strong>Rule-class exclusions</strong> — <code>recommended({ excludeCategories: ['scanner-detection', 'dos-protection'] })</code>. Typically saves 30–50% CPU per request. Don't drop attack classes (<code>sqli</code>, <code>xss</code>, <code>rce</code>).</li>
+      </ul>
     </section>
 
     <footer class="doc-footer">

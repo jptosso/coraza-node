@@ -54,9 +54,8 @@ jobs:
         with:
           name: coraza-wasm
           path: packages/core/src/wasm
+      # Version is read from package.json's `packageManager` field.
       - uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
-        with:
-          version: 9
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
@@ -125,9 +124,8 @@ jobs:
         with:
           name: coraza-wasm
           path: packages/core/src/wasm
+      # Version is read from package.json's `packageManager` field.
       - uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
-        with:
-          version: 9
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
