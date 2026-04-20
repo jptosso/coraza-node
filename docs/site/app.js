@@ -393,67 +393,52 @@
     try { window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*'); } catch {}
   }
   try { window.parent.postMessage({ type: '__edit_mode_available' }, '*'); } catch {}
-  // ---------------- INSTALLER (pm × framework) ----------------
+  // ---------------- INSTALLER (framework only; all pm commands rendered) ----------------
   const installer = document.getElementById('installer');
   if (installer) {
-    const cmdMap = { pnpm: 'pnpm add', npm: 'npm i', yarn: 'yarn add', bun: 'bun add', deno: 'deno add' };
     const pkgMap = {
       express: '@coraza/express',
       fastify: '@coraza/fastify',
       next: '@coraza/next',
       nestjs: '@coraza/nestjs',
-      node: '@coraza/core',
     };
-    const state = {
-      pm: localStorage.getItem('coraza-inst-pm') || 'pnpm',
-      fw: localStorage.getItem('coraza-inst-fw') || 'express',
-    };
-    const prefixEl = document.getElementById('installerPrefix');
-    const pkgEl = document.getElementById('installerPkg');
+    const state = { fw: localStorage.getItem('coraza-inst-fw') || 'express' };
     const copyBtn = document.getElementById('installerCopyBtn');
 
-    function buildCmd() {
-      const pkg = pkgMap[state.fw];
-      if (state.pm === 'deno') {
-        return { prefix: 'deno add', pkg: 'npm:' + pkg, dim: 'npm:@coraza/coreruleset' };
-      }
-      return { prefix: cmdMap[state.pm], pkg, dim: '@coraza/coreruleset' };
-    }
-
     function renderInstaller() {
-      const { prefix, pkg, dim } = buildCmd();
-      prefixEl.textContent = prefix;
-      pkgEl.textContent = pkg;
-      const dimEl = installer.querySelector('.installer-cmd-dim');
-      if (dimEl) dimEl.textContent = dim;
-
-      installer.querySelectorAll('.pm-tab').forEach((b) => {
-        b.classList.toggle('is-on', b.dataset.val === state.pm);
+      const pkg = pkgMap[state.fw] || pkgMap.express;
+      installer.querySelectorAll('[data-installer-pkg]').forEach((el) => {
+        el.textContent = pkg;
       });
       installer.querySelectorAll('.fw-card').forEach((b) => {
         b.classList.toggle('is-on', b.dataset.val === state.fw);
+        b.setAttribute('aria-selected', b.dataset.val === state.fw ? 'true' : 'false');
       });
     }
 
-    installer.querySelectorAll('.pm-tab, .fw-card').forEach((b) => {
+    installer.querySelectorAll('.fw-card').forEach((b) => {
       b.addEventListener('click', () => {
-        const picker = b.parentElement.dataset.picker;
-        state[picker] = b.dataset.val;
-        localStorage.setItem('coraza-inst-' + picker, b.dataset.val);
+        state.fw = b.dataset.val;
+        localStorage.setItem('coraza-inst-fw', state.fw);
         renderInstaller();
+        // Keep the quickstart code block in sync with the framework the
+        // user picked in the installer.
+        selectTab('framework', state.fw);
+        localStorage.setItem('coraza-tab-framework', state.fw);
       });
     });
 
     if (copyBtn) {
       copyBtn.addEventListener('click', async () => {
-        const { prefix, pkg, dim } = buildCmd();
+        const text = installer.querySelector('#installerMulti')?.innerText ?? '';
         try {
-          await navigator.clipboard.writeText(`${prefix} ${pkg} ${dim}`);
+          await navigator.clipboard.writeText(text);
           copyBtn.classList.add('is-copied');
-          copyBtn.querySelector('span').textContent = 'copied';
+          const span = copyBtn.querySelector('span');
+          if (span) span.textContent = 'copied';
           setTimeout(() => {
             copyBtn.classList.remove('is-copied');
-            copyBtn.querySelector('span').textContent = 'copy';
+            if (span) span.textContent = 'copy';
           }, 1400);
         } catch {}
       });
