@@ -84,13 +84,13 @@ jobs:
 
       - name: Typecheck (affected + dependents)
         if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run typecheck --filter=...[${{ steps.base.outputs.base }}]
+        run: pnpm turbo run typecheck --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
       - name: Build (affected + dependents)
         if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run build --filter=...[${{ steps.base.outputs.base }}]
+        run: pnpm turbo run build --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
       - name: Unit tests (affected + dependents)
         if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run test:coverage --filter=...[${{ steps.base.outputs.base }}]
+        run: pnpm turbo run test:coverage --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
 
       - name: Typecheck (full)
         if: steps.base.outputs.scope == 'full'
@@ -153,10 +153,10 @@ jobs:
 
       - name: Build (affected + dependents)
         if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run build --filter=...[${{ steps.base.outputs.base }}]
+        run: pnpm turbo run build --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
       - name: E2E (affected + dependents)
         if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run e2e --filter=...[${{ steps.base.outputs.base }}]
+        run: pnpm turbo run e2e --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
 
       - name: Build (full)
         if: steps.base.outputs.scope == 'full'

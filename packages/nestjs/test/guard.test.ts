@@ -99,6 +99,29 @@ describe('CorazaGuard', () => {
     ).rejects.toThrow(HttpException)
   })
 
+  it('throws HttpException when newTransaction itself fails (default fail-closed)', async () => {
+    const { waf } = mockWAF('block')
+    waf.newTransaction = () => {
+      throw new Error('WAF not ready')
+    }
+    const guard = new CorazaGuard(waf)
+    await expect(
+      guard.canActivate(ctx({ method: 'GET', url: '/', headers: {}, socket: {} })),
+    ).rejects.toMatchObject({ getStatus: expect.any(Function) })
+  })
+
+  it('onWAFError: allow returns true when newTransaction fails', async () => {
+    const { waf } = mockWAF('block')
+    waf.newTransaction = () => {
+      throw new Error('WAF not ready')
+    }
+    const guard = new CorazaGuard(waf, { onWAFError: 'allow' })
+    const ok = await guard.canActivate(
+      ctx({ method: 'GET', url: '/', headers: {}, socket: {} }),
+    )
+    expect(ok).toBe(true)
+  })
+
   it('fails closed (503) when WAF itself throws (default)', async () => {
     const { waf } = mockWAF('block')
     const realNew = waf.newTransaction.bind(waf)

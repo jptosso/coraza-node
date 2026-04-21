@@ -102,6 +102,26 @@ describe('@coraza/next', () => {
     expect(onBlock).toHaveBeenCalled()
   })
 
+  it('fails closed (503) when newTransaction itself throws', async () => {
+    const { waf } = mockWAF('block')
+    waf.newTransaction = () => {
+      throw new Error('WAF not ready')
+    }
+    const mw = coraza({ waf })
+    const res = await mw(makeReq('https://example.com/'))
+    expect(res.status).toBe(503)
+  })
+
+  it('onWAFError: allow passes through when newTransaction throws', async () => {
+    const { waf } = mockWAF('block')
+    waf.newTransaction = () => {
+      throw new Error('WAF not ready')
+    }
+    const mw = coraza({ waf, onWAFError: 'allow' })
+    const res = await mw(makeReq('https://example.com/'))
+    expect(res.headers.get('x-middleware-next')).toBe('1')
+  })
+
   it('fails closed (503) on middleware internal error', async () => {
     const { waf } = mockWAF('block')
     const realNew = waf.newTransaction.bind(waf)
