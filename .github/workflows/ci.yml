@@ -23,8 +23,24 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+
+      # Cache the finished wasm binary keyed on everything that goes into
+      # building it (Go sources, Dockerfile, Makefile, go.mod/go.sum).
+      # Ref-scoped by default, so a poisoned PR cache can't leak into main.
+      - name: Cache compiled coraza.wasm
+        id: wasm-cache
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: packages/core/src/wasm/coraza.wasm
+          key: wasm-${{ runner.os }}-${{ hashFiles('wasm/**/*.go', 'wasm/go.mod', 'wasm/go.sum', 'wasm/Dockerfile*', 'wasm/Makefile', 'wasm/version.txt') }}
+          # Don't restore a near-match — a stale wasm would invisibly pass
+          # unit tests but miss behaviour changes from the Go side.
+          restore-keys: ''
+
       - name: Build with reproducible Docker image
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
         run: make -C wasm wasm-docker
+
       - name: Upload WASM artifact
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
@@ -61,6 +77,19 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+
+      # Turbo task cache — speeds up reruns where inputs haven't changed
+      # (e.g. a PR that only touches docs re-pushes unchanged source).
+      # Keyed on lockfile + source so a mutated cache can't change
+      # behaviour; restore-keys are intentionally loose to recover
+      # across PRs of the same branch.
+      - name: Cache turbo tasks
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: .turbo
+          key: turbo-${{ matrix.node }}-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ matrix.node }}-${{ runner.os }}-
 
       - name: Resolve change base
         id: base
@@ -133,6 +162,14 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
 
+      - name: Cache turbo tasks
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: .turbo
+          key: turbo-e2e-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-e2e-${{ runner.os }}-
+
       - name: Resolve change base
         id: base
         run: |
@@ -149,8 +186,27 @@ jobs:
             echo "base=$base" >> "$GITHUB_OUTPUT"
           fi
 
+      # Playwright browsers are huge (~200 MB) and pinned to the
+      # @playwright/test version. Cache keyed on the lockfile +
+      # explicit browser dir; on a cache miss the install step
+      # re-downloads exactly that version.
+      - name: Resolve Playwright version
+        id: pw
+        run: |
+          v=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
       - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         run: pnpm -r --filter "@coraza/{express,fastify,next,nestjs}" exec playwright install --with-deps chromium
+      - name: Install Playwright system deps only (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm -F @coraza/express exec playwright install-deps chromium
 
       # Same pattern as the test job: always build publishable
       # packages first so dist/ is populated; then the E2E run only
