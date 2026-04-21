@@ -44,9 +44,10 @@ type GetMsg = {
   txId: number
   which: 'interruption' | 'matchedRules'
 }
+type ResetMsg = { reqId: number; type: 'reset'; txId: number }
 type CloseMsg = { reqId: number; type: 'close'; txId: number }
 type ShutdownMsg = { reqId: number; type: 'shutdown' }
-type Msg = InitMsg | NewTxMsg | ProcMsg | PredMsg | GetMsg | CloseMsg | ShutdownMsg
+type Msg = InitMsg | NewTxMsg | ProcMsg | PredMsg | GetMsg | ResetMsg | CloseMsg | ShutdownMsg
 
 let waf: WAF | null = null
 const txs = new Map<number, Transaction>()
@@ -120,6 +121,14 @@ parentPort.on('message', async (msg: Msg) => {
         const val: Interruption | MatchedRule[] | null =
           msg.which === 'interruption' ? tx.interruption() : tx.matchedRules()
         parentPort!.postMessage({ reqId: msg.reqId, ok: true, value: val })
+        break
+      }
+
+      case 'reset': {
+        const tx = txs.get(msg.txId)
+        if (!tx) throw new Error(`unknown tx ${msg.txId}`)
+        tx.reset()
+        parentPort!.postMessage({ reqId: msg.reqId, ok: true })
         break
       }
 

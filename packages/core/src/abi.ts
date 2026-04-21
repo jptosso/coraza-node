@@ -23,6 +23,7 @@ export interface CorazaExports {
 
   tx_create(wafId: number): number
   tx_destroy(id: number): void
+  tx_reset(id: number): number
   tx_has_interrupt(id: number): number
   tx_is_rule_engine_off(id: number): number
   tx_is_request_body_accessible(id: number): number

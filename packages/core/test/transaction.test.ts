@@ -158,6 +158,29 @@ describe('Transaction', () => {
     expect(state.txs.get(txId)).toBeUndefined()
   })
 
+  it('reset clears interruption + matched rules; handle stays valid', () => {
+    const { tx, state, txId } = setup({
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    tx.processRequestBundle({ method: 'GET', url: "/?q='OR 1=1--", headers: [] }, undefined)
+    expect(tx.interruption()).not.toBeNull()
+
+    tx.reset()
+    expect(tx.closed).toBe(false)
+    // The underlying TxState is a brand-new one, so interruption clears.
+    const fresh = state.txs.get(txId)!
+    expect(fresh.interrupt).toBeUndefined()
+    expect(fresh.matchedRules).toEqual([])
+    // Same handle is still usable.
+    expect(() => tx.processConnection('1.2.3.4')).not.toThrow()
+  })
+
+  it('reset throws after close', () => {
+    const { tx } = setup()
+    tx.close()
+    expect(() => tx.reset()).toThrow(/closed/)
+  })
+
   it('close is idempotent and flips `closed`', () => {
     const { tx } = setup()
     expect(tx.closed).toBe(false)

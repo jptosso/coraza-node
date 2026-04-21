@@ -248,6 +248,17 @@ export class WorkerTransaction {
     }
   }
 
+  /**
+   * Reset the transaction inside the worker so this same handle can be
+   * reused for the next request. Cheaper than `close()` + `newTransaction()`
+   * under keep-alive — saves one MessagePort round-trip and reuses the
+   * worker-side scratch buffers.
+   */
+  async reset(): Promise<void> {
+    if (this.#closed) throw new Error('coraza: transaction is closed')
+    await callSlot<void>(this.#slot, { type: 'reset', txId: this.#txId })
+  }
+
   get closed(): boolean {
     return this.#closed
   }

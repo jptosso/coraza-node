@@ -26,10 +26,97 @@ func resetState() {
 	for id := range wafs {
 		delete(wafs, id)
 	}
+	for id := range txOwner {
+		delete(txOwner, id)
+	}
 	wafNextID = 0
 	txNextID = 0
 	lastErrMsg = lastErrMsg[:0]
 	unpinAll()
+}
+
+func TestTxReset_ReusesSlotAndClearsInterrupt(t *testing.T) {
+	resetState()
+
+	cfg := []byte(`
+SecRuleEngine On
+SecRule ARGS "@contains nastystring" "id:12345,phase:1,deny,status:403"
+`)
+	wafID := wafCreate(ptrOf(cfg), int32(len(cfg)))
+	if wafID <= 0 {
+		t.Fatalf("waf_create failed: %q", lastErrMsg)
+	}
+	defer wafDestroy(wafID)
+
+	txID := txCreate(wafID)
+	if txID <= 0 {
+		t.Fatalf("tx_create failed: %q", lastErrMsg)
+	}
+
+	// Fire the rule so the tx carries an interruption.
+	method := []byte("GET")
+	uri := []byte("/?q=nastystring")
+	proto := []byte("HTTP/1.1")
+	pkt := encodeHeaderPacket([][2]string{{"Host", "example.com"}})
+	if rc := txProcessURI(txID, ptrOf(method), int32(len(method)), ptrOf(uri), int32(len(uri)), ptrOf(proto), int32(len(proto))); rc != 0 {
+		t.Fatalf("tx_process_uri: rc=%d err=%q", rc, lastErrMsg)
+	}
+	if rc := txProcessRequestHeaders(txID, ptrOf(pkt), int32(len(pkt))); rc != 1 {
+		t.Fatalf("expected interrupt on rc=1, got %d err=%q", rc, lastErrMsg)
+	}
+	if txHasInterrupt(txID) != 1 {
+		t.Fatal("expected tx to carry an interruption before reset")
+	}
+
+	// Reset: same id, fresh state.
+	if got := txReset(txID); got != txID {
+		t.Fatalf("tx_reset returned %d, want %d (err=%q)", got, txID, lastErrMsg)
+	}
+	if txHasInterrupt(txID) != 0 {
+		t.Fatal("tx still holds interruption after reset")
+	}
+
+	// Handle must still be usable.
+	cleanURI := []byte("/health")
+	if rc := txProcessURI(txID, ptrOf(method), int32(len(method)), ptrOf(cleanURI), int32(len(cleanURI)), ptrOf(proto), int32(len(proto))); rc != 0 {
+		t.Fatalf("tx_process_uri after reset: rc=%d err=%q", rc, lastErrMsg)
+	}
+	if rc := txProcessRequestHeaders(txID, ptrOf(pkt), int32(len(pkt))); rc != 0 {
+		t.Fatalf("clean request blocked unexpectedly: rc=%d", rc)
+	}
+
+	txDestroy(txID)
+}
+
+func TestTxReset_UnknownTx(t *testing.T) {
+	resetState()
+	if got := txReset(999); got != -1 {
+		t.Errorf("expected -1 for unknown tx, got %d", got)
+	}
+	if len(lastErrMsg) == 0 {
+		t.Error("expected last_error to be set")
+	}
+}
+
+func TestTxReset_OrphanedWAF(t *testing.T) {
+	resetState()
+
+	cfg := []byte("SecRuleEngine On")
+	wafID := wafCreate(ptrOf(cfg), int32(len(cfg)))
+	txID := txCreate(wafID)
+	if txID <= 0 {
+		t.Fatalf("tx_create failed: %q", lastErrMsg)
+	}
+
+	// Destroy the WAF out from under the tx. Reset should refuse and
+	// simultaneously clean up the orphaned slot.
+	wafDestroy(wafID)
+	if got := txReset(txID); got != -1 {
+		t.Errorf("expected -1 when owning waf destroyed, got %d", got)
+	}
+	if _, still := txs[txID]; still {
+		t.Error("reset should have cleaned up the orphan slot")
+	}
 }
 
 func TestWAFAndTx_RequestPipeline(t *testing.T) {

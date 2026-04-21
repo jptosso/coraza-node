@@ -144,6 +144,24 @@ export function createMock(opts: MockOptions = {}): {
       t.closed = true
       state.txs.delete(id)
     },
+    tx_reset: (id) => {
+      const t = state.txs.get(id)
+      if (!t) {
+        state.lastError = 'unknown tx id'
+        return -1
+      }
+      // Replace with a blank TxState bound to the same wafId so the
+      // transaction object behaves like a freshly-created one.
+      state.txs.set(id, {
+        wafId: t.wafId,
+        matchedRules: [],
+        headers: [],
+        responseHeaders: [],
+        closed: false,
+        loggingCalls: t.loggingCalls + 1,
+      })
+      return id
+    },
     tx_has_interrupt: (id) => {
       const t = state.txs.get(id)
       return t?.interrupt ? 1 : 0

@@ -72,10 +72,24 @@ Create a new transaction. Returns a positive `tx_id`, or `-1` on error.
 Runs `ProcessLogging` (if not already run), calls `tx.Close()`, and releases
 the slot. Idempotent.
 
-### `tx_reset(tx_id: i32) -> i32` *(optional, post-v1)*
+### `tx_reset(tx_id: i32) -> i32`
 
-Resets a transaction for reuse without allocating a new one. Currently
-`tx_destroy + tx_create` is used; this export is reserved.
+Finalise the current transaction (runs `ProcessLogging` + `Close`) and
+replace it with a fresh transaction on the same owning WAF, reusing the
+same `tx_id`. Returns the same `tx_id` on success, `-1` on error (call
+`last_error`).
+
+Use when you want a new transaction without re-allocating a WASM handle
+— e.g. HTTP/1.1 keep-alive loops or a pool worker processing back-to-back
+requests. Cheaper than `tx_destroy` + `tx_create` because it skips one
+host ↔ WASM round-trip and lets the JS `Transaction` object keep its
+cached scratch buffers.
+
+Errors:
+- `-1, last_error="unknown tx id"` — `tx_id` isn't live.
+- `-1, last_error="owning waf has been destroyed"` — the WAF that
+  created this transaction has been destroyed. The stale slot is cleaned
+  up as a side-effect, so the caller does not need to call `tx_destroy`.
 
 ---
 

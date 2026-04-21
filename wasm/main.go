@@ -35,7 +35,7 @@ func init() {
 
 const (
 	abiMajor = 1
-	abiMinor = 0
+	abiMinor = 1 // +tx_reset
 )
 
 //export abi_version
@@ -48,6 +48,10 @@ var (
 	wafNextID int32
 
 	txs      = map[int32]types.Transaction{}
+	// Parallel map: tx id -> owning waf id. Needed so `tx_reset` can
+	// ask the same WAF for a replacement transaction without the
+	// caller having to remember (and re-send) the waf id.
+	txOwner  = map[int32]int32{}
 	txNextID int32
 
 	lastErrMsg []byte
@@ -104,6 +108,7 @@ func txCreate(wafID int32) int32 {
 	}
 	id := newTxID()
 	txs[id] = waf.NewTransaction()
+	txOwner[id] = wafID
 	return id
 }
 
@@ -117,6 +122,39 @@ func txDestroy(id int32) {
 	tx.ProcessLogging()
 	_ = tx.Close()
 	delete(txs, id)
+	delete(txOwner, id)
+}
+
+// tx_reset finalises the current transaction (audit log + close) and
+// replaces it with a fresh one on the same WAF, reusing the same id.
+// Saves the JS caller a round-trip for a new handle and lets Coraza
+// reuse the transaction object's internal buffers where it can. Returns
+// the same id on success, -1 with last_error set on failure.
+//
+//export tx_reset
+func txReset(id int32) int32 {
+	tx, ok := txs[id]
+	if !ok {
+		return setErr(errors.New("unknown tx id"))
+	}
+	wafID, ok := txOwner[id]
+	if !ok {
+		return setErr(errors.New("tx has no owner waf"))
+	}
+	waf, ok := wafs[wafID]
+	if !ok {
+		// The WAF has been destroyed since this tx was created. Clean up
+		// and surface the error rather than leaving a dangling slot.
+		tx.ProcessLogging()
+		_ = tx.Close()
+		delete(txs, id)
+		delete(txOwner, id)
+		return setErr(errors.New("owning waf has been destroyed"))
+	}
+	tx.ProcessLogging()
+	_ = tx.Close()
+	txs[id] = waf.NewTransaction()
+	return id
 }
 
 //export tx_has_interrupt

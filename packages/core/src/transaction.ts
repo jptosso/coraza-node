@@ -221,6 +221,22 @@ export class Transaction {
     this.#abi.exports.tx_destroy(this.#id)
   }
 
+  /**
+   * Finalise the current transaction (audit log + close) and replace it
+   * with a fresh one on the same WAF, keeping this handle valid. Use
+   * when you want a new transaction without the allocation cost of
+   * `waf.newTransaction()` — e.g. per-connection HTTP/1.1 keep-alive
+   * loops, or a worker processing back-to-back requests.
+   *
+   * Throws if the transaction has already been closed or if the owning
+   * WAF has been destroyed.
+   */
+  reset(): void {
+    this.#ensureOpen()
+    const rc = this.#abi.exports.tx_reset(this.#id)
+    this.#abi.check(rc, 'tx_reset')
+  }
+
   get closed(): boolean {
     return this.#closed
   }
