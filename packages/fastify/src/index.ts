@@ -143,43 +143,58 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
   })
 
   if (inspectResponse) {
-    fastify.addHook('onSend', async (req, reply, payload) => {
-      const tx = (req as WithTx)[TX_SYMBOL]
-      if (!tx) return payload
-      try {
-        const rHdrInterrupted = await tx.processResponse({
-          status: reply.statusCode,
-          headers: headersOf(
-            reply.getHeaders() as Record<string, string | string[]>,
-          ),
-          protocol: 'HTTP/1.1',
-        })
-        if (rHdrInterrupted) {
-          const it = await tx.interruption()
-          if (it) {
-            reply.code(it.status || 403)
-            return `Request blocked by Coraza (rule ${it.ruleId})\n`
-          }
-        }
-        if (payload != null && (await tx.isResponseBodyProcessable())) {
-          const buf = payloadToBytes(payload)
-          if (buf && (await tx.processResponseBody(buf))) {
+    if (isPoolWAF(waf)) {
+      // Fastify's onSend hook runs after the framework has decided the
+      // serialised payload + headers; once we await a pool round-trip
+      // (processResponse / processResponseBody) the reply's write path
+      // can already be mid-flight, so `reply.code(...)` on a block
+      // verdict triggers ERR_HTTP_HEADERS_SENT and crashes the whole
+      // process. The Express adapter hit the same shape and resolved
+      // it by skipping response-phase inspection when the WAF is a
+      // pool; we mirror that here so inspectResponse: true is a no-op
+      // (not an unsafe partial feature) under pools.
+      waf.logger.warn(
+        'coraza: inspectResponse=true is a no-op when using WAFPool; use a single WAF or drop response inspection',
+      )
+    } else {
+      fastify.addHook('onSend', async (req, reply, payload) => {
+        const tx = (req as WithTx)[TX_SYMBOL]
+        if (!tx) return payload
+        try {
+          const rHdrInterrupted = await tx.processResponse({
+            status: reply.statusCode,
+            headers: headersOf(
+              reply.getHeaders() as Record<string, string | string[]>,
+            ),
+            protocol: 'HTTP/1.1',
+          })
+          if (rHdrInterrupted) {
             const it = await tx.interruption()
             if (it) {
               reply.code(it.status || 403)
               return `Request blocked by Coraza (rule ${it.ruleId})\n`
             }
           }
+          if (payload != null && (await tx.isResponseBodyProcessable())) {
+            const buf = payloadToBytes(payload)
+            if (buf && (await tx.processResponseBody(buf))) {
+              const it = await tx.interruption()
+              if (it) {
+                reply.code(it.status || 403)
+                return `Request blocked by Coraza (rule ${it.ruleId})\n`
+              }
+            }
+          }
+        } catch (err) {
+          ;(req.log ?? waf.logger).error(
+            `coraza: response inspection failed: ${(err as Error).message}`,
+          )
+          // Response phase errors don't turn into 503s — the response is
+          // already mid-flight and we'd double-write. Log and let it through.
         }
-      } catch (err) {
-        ;(req.log ?? waf.logger).error(
-          `coraza: response inspection failed: ${(err as Error).message}`,
-        )
-        // Response phase errors don't turn into 503s — the response is
-        // already mid-flight and we'd double-write. Log and let it through.
-      }
-      return payload
-    })
+        return payload
+      })
+    }
   }
 
   fastify.addHook('onResponse', async (req) => {
@@ -191,6 +206,16 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
       await tx.close()
     }
   })
+}
+
+function isPoolWAF(waf: AnyWAF): boolean {
+  // WAFPool.newTransaction is declared `async`, so its constructor name is
+  // 'AsyncFunction'; the sync WAF's newTransaction is a plain function.
+  // Matches the same sync/async shape test used in @coraza/express.
+  return (
+    (waf.newTransaction as { constructor: { name: string } }).constructor.name ===
+    'AsyncFunction'
+  )
 }
 
 export const coraza = fp(pluginImpl, {

@@ -195,14 +195,18 @@ if [[ "${SKIP_BOOT}" != "1" ]]; then
   APP_PID="$(cat "${BUILD_DIR}/${ADAPTER}.pid")"
   APP_PGID="${APP_PID}"
 
-  # Health-probe loop. We accept 200 (echo-all responded) or 403
-  # (WAF blocked the bare GET / request — shouldn't happen at PL2
-  # but harmless).
+  # Health-probe loop. We accept ANY three-digit HTTP status — the
+  # probe's only job is to confirm the kernel socket is accepting and
+  # the server is parsing HTTP. The actual per-test expectations are
+  # handled by go-ftw later. Historically we accepted only 200/403, but
+  # if the catch-all route ever fails to match `/` (e.g. a router
+  # syntax regression) the probe silently treated the server as "not
+  # listening" for 180s — masking a real bug as a boot timeout.
   retries="${BOOT_TIMEOUT}"
   status="000"
   while [[ "${retries}" -gt 0 ]]; do
     status="$(curl -sS -o /dev/null --connect-timeout 2 -w '%{http_code}' "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
-    if [[ "${status}" == "200" || "${status}" == "403" ]]; then
+    if [[ "${status}" =~ ^[2-5][0-9][0-9]$ ]]; then
       break
     fi
     if ! kill -0 "${APP_PID}" 2>/dev/null; then

@@ -40,8 +40,12 @@ if (!wafDisabled) {
 if (ftw) {
   // Single catch-all that echoes everything back. Mount before the named
   // demo routes so FTW traffic always hits the same handler regardless
-  // of the test case's target URL.
-  app.all('/*any', (req, res) => {
+  // of the test case's target URL. The `/{*any}` form (optional wildcard)
+  // is required in Express 5 / path-to-regexp v8: plain `/*any` only
+  // matches one-or-more segments, so GET `/` silently fell through to
+  // Express's finalhandler 404 — which then broke the FTW health probe
+  // (it only accepted 200/403) and masked the server as "not listening".
+  app.all('/{*any}', (req, res) => {
     const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) {
       if (typeof v === 'string') headers[k] = v
@@ -79,47 +83,18 @@ if (ftw) {
   )
 }
 
-// Bind to the loopback interface literally. Every prior attempt bound
-// on the dual-stack (`::`) or IPv4 wildcard (`0.0.0.0`) addresses and
-// the runner's `127.0.0.1` connect came back ECONNREFUSED for 180s
-// straight — despite Node's listen callback reporting the bind
-// succeeded. Whatever the interaction is (pnpm / tsx / setsid / kernel
-// netfilter on this runner flavour), binding to 127.0.0.1 directly
-// dodges it on every other adapter too.
-//
-// Use `http.createServer(app).listen(...)` directly rather than
-// `app.listen(...)`. Express 5's wrapper returns the server but shape-
-// shifts with the args passed; the direct form is what Express 4's
-// listen was under the hood and is less surprising when debugging.
+// Bind on the IPv4 wildcard so go-ftw's `127.0.0.1` probe always matches
+// regardless of the host's v4/v6 preference. Use
+// `http.createServer(app).listen(...)` directly rather than Express 5's
+// `app.listen(...)` — the latter is a thin wrapper whose shape shifts
+// with the args passed and is harder to reason about when debugging.
 process.stderr.write(`[${new Date().toISOString()}] express calling listen()\n`)
 const server = http.createServer(app)
-server.listen(port, '127.0.0.1', () => {
+server.listen(port, '0.0.0.0', () => {
   const addr = server.address()
   process.stderr.write(
     `[${new Date().toISOString()}] express listen callback fired; address=${JSON.stringify(addr)}\n`,
   )
-  // Self-check: connect from the SAME process's event loop to confirm
-  // the kernel really is accepting on the port. If Node reports the
-  // server bound but a same-host in-process connect fails, the
-  // problem is downstream of Node — the bind did happen, something
-  // else intercepts the connect. If the in-process connect succeeds
-  // but the bash `curl` outside can't, the problem is outside Node
-  // (runner namespace, firewall, pnpm/setsid plumbing).
-  const req = http.request(
-    { host: '127.0.0.1', port, path: '/', method: 'GET', timeout: 2000 },
-    (res) => {
-      process.stderr.write(
-        `[${new Date().toISOString()}] express self-check HTTP ${res.statusCode}\n`,
-      )
-      res.resume()
-    },
-  )
-  req.on('error', (err) => {
-    process.stderr.write(
-      `[${new Date().toISOString()}] express self-check ERROR: ${(err as Error).message}\n`,
-    )
-  })
-  req.end()
 })
 server.on('error', (err: unknown) => {
   process.stderr.write(`express listen error: ${(err as Error).message}\n`)
