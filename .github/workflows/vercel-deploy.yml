@@ -97,6 +97,13 @@ jobs:
           mkdir -p examples/express-app/vendor
           cp -r examples/shared examples/express-app/vendor/example-shared
 
+      # Install pnpm globally so Vercel's `vercel build` can spawn it.
+      # pnpm/action-setup puts pnpm in PNPM_HOME which GitHub Actions' PATH
+      # sees, but vercel-cli's child-process spawn doesn't, so we also need
+      # a global install reachable from a standard PATH location.
+      - name: Install pnpm globally
+        run: npm i -g pnpm@10
+
       - name: Install Vercel CLI
         run: npm i -g vercel@latest
 
