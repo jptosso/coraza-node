@@ -93,6 +93,20 @@ const server = app.listen(port, '0.0.0.0', () => {
 server.on('error', (err: unknown) => {
   process.stderr.write(`express listen error: ${(err as Error).message}\n`)
 })
+// Under FTW mode the CRS corpus sends CONNECT requests (920100-4..6).
+// Node's http.Server closes the socket when no `connect` listener is
+// registered, which go-ftw surfaces as `unexpected EOF` and treats as
+// a hard error — aborting the whole run. Respond with 501 so go-ftw
+// reads a proper HTTP line and carries on to the next test. The adapter
+// controller mounted above never sees CONNECT because it never reaches
+// Express's `request` dispatch; the WAF never sees it either, which is
+// fine — CONNECT isn't a phase-1 attack surface we enforce.
+if (ftw) {
+  server.on('connect', (_req, socket) => {
+    socket.write('HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+    socket.end()
+  })
+}
 // Keep a handler around so SIGTERM shows up in stderr too — makes the
 // "when did we exit" question answerable from the artifact alone.
 process.on('SIGTERM', () => {

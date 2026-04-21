@@ -120,6 +120,27 @@ const app = await NestFactory.create(AppModule, {
   rawBody: true,
 })
 await app.listen(port)
+
+// Under FTW mode the CRS corpus sends CONNECT requests (SSL tunneling
+// tests). Node's http.Server closes the socket when no `connect`
+// listener is registered, which go-ftw surfaces as `unexpected EOF`
+// and aborts the whole run. Respond 501 so go-ftw reads a status line
+// and moves on. The guard never sees CONNECT because it never reaches
+// Nest's request dispatch; phase-1 analysis doesn't apply to CONNECT.
+if (ftw) {
+  const httpServer = app.getHttpServer() as {
+    on: (
+      event: 'connect',
+      listener: (req: unknown, socket: { write: (s: string) => void; end: () => void }) => void,
+    ) => void
+  }
+  httpServer.on('connect', (_req, socket) => {
+    socket.write(
+      'HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+    )
+    socket.end()
+  })
+}
 console.log(
   `nestjs listening on :${port} (mode=${mode}, waf=${wafDisabled ? 'off' : 'on'}${ftw ? ', FTW=1 paranoia=2' : ''})`,
 )

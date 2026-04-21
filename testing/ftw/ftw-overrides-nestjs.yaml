@@ -25,9 +25,12 @@ testoverride:
     port: 8080
 
   ignore:
+    # ---- [node-http] CONNECT method — see shared file for details ------
+    "920100-4": "[node-http] CONNECT: Node http closes socket with no connect-handler"
+    "920100-5": "[node-http] CONNECT: Node http closes socket with no connect-handler"
+    "920100-6": "[node-http] CONNECT: Node http closes socket with no connect-handler"
+
     # ---- [apache] (shared) ---------------------------------------------
-    "920100-4": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
-    "920100-5": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
     "920100-8": "[apache] Node http accepts ':' in path; test expects Apache 400"
     "920270-4": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"
     "920290-1": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"

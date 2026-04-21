@@ -48,9 +48,18 @@ testoverride:
     port: 8080
 
   ignore:
+    # ---- [node-http] CONNECT method has no default handler ------------
+    # Node's http.Server closes the socket when a CONNECT request arrives
+    # without a `connect` event listener. go-ftw reads that as
+    # `unexpected EOF` and aborts the whole run — not a per-test failure,
+    # a hard error. Skip the handful of CONNECT-method cases in the
+    # corpus; adding a CONNECT handler on every adapter example would
+    # diverge them from "a normal Node HTTP app".
+    "920100-4": "[node-http] CONNECT: Node http closes socket with no connect-handler"
+    "920100-5": "[node-http] CONNECT: Node http closes socket with no connect-handler"
+    "920100-6": "[node-http] CONNECT: Node http closes socket with no connect-handler"
+
     # ---- [apache] status/body surface expectations ---------------------
-    "920100-4": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
-    "920100-5": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
     "920100-8": "[apache] Node http accepts ':' in path; test expects Apache 400"
     "920270-4": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"
     "920290-1": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"

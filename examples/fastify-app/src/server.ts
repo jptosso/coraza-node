@@ -78,6 +78,22 @@ if (ftw) {
 }
 
 await app.listen({ port, host: '0.0.0.0' })
+
+// Under FTW mode the CRS corpus sends CONNECT requests (SSL tunneling
+// tests). Node's http.Server closes the socket when no `connect`
+// listener is registered, which go-ftw surfaces as `unexpected EOF`
+// and treats as a hard error — aborting the whole run. Respond 501 so
+// go-ftw reads a proper HTTP status line and moves on. Fastify's WAF
+// hook never sees CONNECT because it never reaches Fastify's request
+// dispatch; phase-1 analysis doesn't apply to the CONNECT verb anyway.
+if (ftw) {
+  app.server.on('connect', (_req, socket) => {
+    socket.write(
+      'HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+    )
+    socket.end()
+  })
+}
 console.log(
   `fastify listening on :${port} (mode=${mode}, waf=${wafDisabled ? 'off' : 'on'}${ftw ? ', FTW=1 paranoia=2' : ''})`,
 )
