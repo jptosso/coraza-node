@@ -1,5 +1,5 @@
 ---
-# go-ftw overrides for the Next.js adapter leg only.
+# go-ftw configuration for the Next.js adapter leg only.
 #
 # Why per-adapter? Next's `middleware.ts` runs on the request boundary
 # and cannot read the downstream Route Handler's response body — that's
@@ -9,62 +9,65 @@
 # other adapter (Express, Fastify, NestJS) inspects the response stream
 # and enforces these rules normally.
 #
-# Keep this file in sync with `ftw-overrides.yaml`'s `ignore:` block;
-# `run.sh` picks this file when ADAPTER=next and the shared file for
-# everyone else.
+# Keep the first 24 entries of `testoverride.ignore:` in sync with
+# `ftw-overrides.yaml`; `run.sh` picks this file when ADAPTER=next and
+# the shared file for everyone else.
 #
 # If a future Next setup (e.g. Route Handler wrapper helper, custom
-# server) can inspect response bodies, delete the `[next-only]`
-# entries so the corpus enforces them again.
+# server) can inspect response bodies, delete the `[next-only]` entries
+# so the corpus enforces them again.
 
-input:
-  dest_addr: 127.0.0.1
-  port: 8080
+mode: cloud
 
-ignore:
-  # ---- [apache] (shared) -----------------------------------------------
-  "920100-4": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
-  "920100-5": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
-  "920100-8": "[apache] Node http accepts ':' in path; test expects Apache 400"
-  "920270-4": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"
-  "920290-1": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"
-  "920430-5": "[node-http] Node rejects bogus Content-Length before WAF runs"
-  "920430-8": "[node-http] Node http rejects HTTP/3.0 with 400; test expects 505"
+testoverride:
+  input:
+    dest_addr: 127.0.0.1
+    port: 8080
 
-  # ---- [upstream-coraza] (shared) --------------------------------------
-  "921250-1": "[upstream-coraza] $Version cookie match not yet implemented upstream"
-  "921250-2": "[upstream-coraza] $Version cookie match not yet implemented upstream"
-  "933120-2": "[upstream-coraza] match_regex is ModSec-specific; not supported"
+  ignore:
+    # ---- [apache] (shared) ---------------------------------------------
+    "920100-4": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
+    "920100-5": "[apache] Invalid URI: Node http surfaces 404, test expects Apache 400"
+    "920100-8": "[apache] Node http accepts ':' in path; test expects Apache 400"
+    "920270-4": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"
+    "920290-1": "[apache] Rule fires (audit confirms); expected 400 is Apache-specific"
+    "920430-5": "[node-http] Node rejects bogus Content-Length before WAF runs"
+    "920430-8": "[node-http] Node http rejects HTTP/3.0 with 400; test expects 505"
 
-  # ---- [node-http] (shared) --------------------------------------------
-  "920274-1": "[node-http] URI charset edge case; Node normalizes before WAF"
-  "920280-3": "[node-http] Empty Host header rewritten by Node http"
-  "920290-4": "[node-http] Empty Host header rewritten by Node http"
-  "920430-3": "[node-http] expect_error semantics differ from Apache"
-  "920430-9": "[node-http] HTTP version variant parsed differently"
-  "920610-2": "[node-http] Accept-Encoding variant — rule fires on other variants"
-  "920620-1": "[node-http] Content-Type charset parsing edge case"
-  "922130-1": "[node-http] Multipart boundary edge case"
-  "922130-2": "[node-http] Multipart boundary edge case"
-  "922130-7": "[node-http] Multipart boundary edge case"
+    # ---- [upstream-coraza] (shared) ------------------------------------
+    "921250-1": "[upstream-coraza] $Version cookie match not yet implemented upstream"
+    "921250-2": "[upstream-coraza] $Version cookie match not yet implemented upstream"
+    "933120-2": "[upstream-coraza] match_regex is ModSec-specific; not supported"
 
-  # ---- [next-only] outbound response-body rules ------------------------
-  # Next middleware runs on the request boundary only. The downstream
-  # Route Handler returns a Response object directly to the Next runtime;
-  # middleware can redirect or rewrite URLs but cannot read the response
-  # body. Every CRS RESPONSE-* rule therefore has no input on Next and
-  # is skipped here — the protection still enforces on the other three
-  # adapters, which see the response via their framework's on-response
-  # hook.
-  "950100": "[next-only] ASP/JSP source leak — Next middleware has no response-body access"
-  "950130": "[next-only] Directory-listing leak — Next middleware has no response-body access"
-  "951100": "[next-only] SQL-error leak (Microsoft) — Next middleware has no response-body access"
-  "952100": "[next-only] Java error leak — Next middleware has no response-body access"
-  "953100": "[next-only] PHP error leak — Next middleware has no response-body access"
-  "953110": "[next-only] PHP error leak — Next middleware has no response-body access"
-  "953120": "[next-only] PHP source leak — Next middleware has no response-body access"
-  "954100": "[next-only] IIS error leak — Next middleware has no response-body access"
-  "955100": "[next-only] Webshell output leak — Next middleware has no response-body access"
+    # ---- [node-http] (shared) ------------------------------------------
+    "920274-1": "[node-http] URI charset edge case; Node normalizes before WAF"
+    "920280-3": "[node-http] Empty Host header rewritten by Node http"
+    "920290-4": "[node-http] Empty Host header rewritten by Node http"
+    "920430-3": "[node-http] expect_error semantics differ from Apache"
+    "920430-9": "[node-http] HTTP version variant parsed differently"
+    "920610-2": "[node-http] Accept-Encoding variant — rule fires on other variants"
+    "920620-1": "[node-http] Content-Type charset parsing edge case"
+    "922130-1": "[node-http] Multipart boundary edge case"
+    "922130-2": "[node-http] Multipart boundary edge case"
+    "922130-7": "[node-http] Multipart boundary edge case"
 
-forcepass:
-forcefail:
+    # ---- [next-only] outbound response-body rules ----------------------
+    # Next middleware runs on the request boundary only. The downstream
+    # Route Handler returns a Response object directly to the Next runtime;
+    # middleware can redirect or rewrite URLs but cannot read the response
+    # body. Every CRS RESPONSE-* rule therefore has no input on Next and
+    # is skipped here — the protection still enforces on the other three
+    # adapters, which see the response via their framework's on-response
+    # hook.
+    "950100": "[next-only] ASP/JSP source leak — Next middleware has no response-body access"
+    "950130": "[next-only] Directory-listing leak — Next middleware has no response-body access"
+    "951100": "[next-only] SQL-error leak (Microsoft) — Next middleware has no response-body access"
+    "952100": "[next-only] Java error leak — Next middleware has no response-body access"
+    "953100": "[next-only] PHP error leak — Next middleware has no response-body access"
+    "953110": "[next-only] PHP error leak — Next middleware has no response-body access"
+    "953120": "[next-only] PHP source leak — Next middleware has no response-body access"
+    "954100": "[next-only] IIS error leak — Next middleware has no response-body access"
+    "955100": "[next-only] Webshell output leak — Next middleware has no response-body access"
+
+  forcepass:
+  forcefail:

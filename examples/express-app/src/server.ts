@@ -78,4 +78,11 @@ if (ftw) {
   )
 }
 
-app.listen(port)
+// Bind explicitly to IPv4 0.0.0.0. Express 5 + Node 22 default to the
+// IPv6 wildcard (`::`), which relies on IPv4-mapped-IPv6 accept. Some
+// GitHub runner kernels (and any host with `net.ipv6.bindv6only=1`)
+// won't route a `127.0.0.1` connect to it, so the FTW health probe
+// hangs on ECONNREFUSED. The explicit IPv4 host removes that surprise.
+app.listen(port, '0.0.0.0', () => {
+  console.log(`express listening on 0.0.0.0:${port}`)
+})

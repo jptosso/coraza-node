@@ -77,16 +77,22 @@ case "${ADAPTER}" in
 esac
 PORT="${PORT:-${DEFAULT_PORT}}"
 
-# Prefer an adapter-specific overrides file when present
+# Prefer an adapter-specific config file when present
 # (ftw-overrides-next.yaml in particular adds the RESPONSE-95x skips
 # that only apply to Next's middleware runtime). Falls back to the
 # shared file for every adapter that inspects response bodies.
+#
+# Historically these were passed via `--overrides`, but go-ftw v2
+# changed that flag to accept a different schema (platform overrides,
+# keyed by rule_id). Our legacy files — `testoverride.input` + the
+# `ignore` map — are a valid `FTWConfiguration`, so we pass them via
+# `--config` instead.
 if [[ -f "${SCRIPT_DIR}/ftw-overrides-${ADAPTER}.yaml" ]]; then
-  OVERRIDES="${SCRIPT_DIR}/ftw-overrides-${ADAPTER}.yaml"
+  CONFIG_TEMPLATE="${SCRIPT_DIR}/ftw-overrides-${ADAPTER}.yaml"
 else
-  OVERRIDES="${OVERRIDES_DEFAULT}"
+  CONFIG_TEMPLATE="${OVERRIDES_DEFAULT}"
 fi
-echo "[ftw] overrides=${OVERRIDES##*/}"
+echo "[ftw] config=${CONFIG_TEMPLATE##*/}"
 
 # --- 1. Resolve the CRS version --------------------------------------
 if [[ -n "${CRS_TAG:-}" ]]; then
@@ -226,24 +232,26 @@ OUT_JSON="${BUILD_DIR}/ftw-result-${ADAPTER}.json"
 INCLUDE_FLAG=()
 [[ -n "${INCLUDE}" ]] && INCLUDE_FLAG=(--include "${INCLUDE}")
 
-# Connection settings — communicate target host/port via FTW_* env.
-# `ftw run` picks up `--host` / `--port` overrides from CLI too; we use
-# env vars so the same ftw-overrides.yaml works across matrix legs.
-export FTW_TEST_HOST="127.0.0.1"
-export FTW_TEST_PORT="${PORT}"
+# Synthesise a per-run config with the adapter's actual port swapped in.
+# CRS test YAMLs hard-code `port: 80` (Apache convention); without the
+# testoverride.input.port rewrite, go-ftw tries 127.0.0.1:80 and every
+# case fails with `connect: connection refused`.
+CONFIG_FILE="${BUILD_DIR}/ftw-config-${ADAPTER}.yaml"
+sed -E "s/(^[[:space:]]*port:)[[:space:]]*[0-9]+$/\\1 ${PORT}/" \
+  "${CONFIG_TEMPLATE}" > "${CONFIG_FILE}"
 
-# Cloud mode: tell go-ftw to assess each case purely from the HTTP status
-# code. Our adapters don't share a common log file go-ftw can tail — each
-# block decision surfaces as a 403 response via `onBlock`. Without this
-# flag go-ftw errors out with `Error: no log file supplied` before a
-# single test executes. Cloud mode disables log-marker checks; that's
-# acceptable here because the CRS corpus tests we care about use
-# `status: 403` as their primary assertion.
+# Cloud mode: tell go-ftw to assess each case purely from the HTTP
+# status code. Our adapters don't share a common log file go-ftw can
+# tail — each block decision surfaces as a 403 response via `onBlock`.
+# Without cloud mode go-ftw errors out with `Error: no log file
+# supplied` before a single test executes. Cloud mode disables
+# log-marker checks; that's acceptable because the CRS corpus tests we
+# care about use `status: 403` as their primary assertion.
 set +e
 "${FTW_BIN}" run \
   --cloud \
+  --config "${CONFIG_FILE}" \
   --dir "${CRS_TESTS_DIR}" \
-  --overrides "${OVERRIDES}" \
   --output json \
   --read-timeout 10s \
   ${DEBUG} \
