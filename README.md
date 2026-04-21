@@ -31,22 +31,32 @@ the WASM via [`coraza-coreruleset`](https://github.com/corazawaf/coraza-corerule
 ## Quick start — Express
 
 ```ts
+import os from 'node:os'
 import express from 'express'
-import { createWAF } from '@coraza/core'
+import { createWAFPool } from '@coraza/core'
 import { coraza } from '@coraza/express'
 import { recommended } from '@coraza/coreruleset'
 
 const app = express()
 app.use(express.json())
 
-const waf = await createWAF({ rules: recommended(), mode: 'block' })
+// Pool across worker threads — the recommended shape for production.
+// One WAF per CPU core, round-robin dispatch.
+const waf = await createWAFPool({
+  rules: recommended(),
+  mode: 'block',
+  size: os.availableParallelism(),
+})
 app.use(coraza({ waf }))
 
 app.get('/', (_req, res) => res.json({ ok: true }))
 app.listen(3000)
 ```
 
-Multi-core (4.5× throughput): swap `createWAF` for `createWAFPool`.
+`createWAF` is available for single-core, synchronous workloads (tests,
+lambdas, CLIs). For long-running HTTP servers, always use
+`createWAFPool` — ~4.5× throughput on an 8-core box with the same API.
+
 Full guide — tuning, custom block responses, fail-open/closed, detect-only
 mode, per-adapter options — lives on the docs site:
 **[jptosso.github.io/coraza-node](https://jptosso.github.io/coraza-node)**.
