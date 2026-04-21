@@ -1,6 +1,6 @@
 module github.com/jptosso/coraza-node/wasm
 
-go 1.23.0
+go 1.26.0
 
 require (
 	github.com/corazawaf/coraza-coreruleset/v4 v4.10.0

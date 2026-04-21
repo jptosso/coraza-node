@@ -11,9 +11,9 @@
 # paranoia level that omits them, or (c) build with standard Go's
 # `wasip1` target (see Dockerfile.gowasi — TODO).
 
-FROM golang:1.23.4-bookworm AS builder
+FROM golang:1.26.2-bookworm AS builder
 
-ARG TINYGO_VERSION=0.34.0
+ARG TINYGO_VERSION=0.41.0
 ENV TINYGO_VERSION=${TINYGO_VERSION}
 
 RUN apt-get update \
