@@ -133,7 +133,10 @@ mkdir -p "${INSTALL_DIR}"
 export GOBIN="${INSTALL_DIR}"
 if [[ ! -x "${GOBIN}/go-ftw" ]]; then
   echo "[ftw] Installing go-ftw@${GO_FTW_VERSION}…"
-  GO111MODULE=on go install "github.com/coreruleset/go-ftw@${GO_FTW_VERSION}"
+  # go-ftw follows Go's semantic import versioning — from v2.0.0 the
+  # module path gains the /v2 suffix. `go install` rejects an import
+  # path that doesn't match the module's own go.mod declaration.
+  GO111MODULE=on go install "github.com/coreruleset/go-ftw/v2@${GO_FTW_VERSION}"
 fi
 FTW_BIN="${GOBIN}/go-ftw"
 
