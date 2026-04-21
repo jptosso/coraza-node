@@ -1,6 +1,6 @@
 {
   "name": "@coraza/core",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.0",
   "description": "Experimental community packaging of OWASP Coraza WAF for Node.js — core engine (WASM loader). Not an official Coraza/OWASP release.",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",
@@ -10,7 +10,14 @@
     "url": "https://github.com/jptosso/coraza-node.git",
     "directory": "packages/core"
   },
-  "keywords": ["waf", "coraza", "owasp", "security", "wasm", "coreruleset"],
+  "keywords": [
+    "waf",
+    "coraza",
+    "owasp",
+    "security",
+    "wasm",
+    "coreruleset"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -28,7 +35,11 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=22"
   },

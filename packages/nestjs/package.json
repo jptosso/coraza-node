@@ -1,6 +1,6 @@
 {
   "name": "@coraza/nestjs",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.0",
   "description": "NestJS module + guard for Coraza WAF.",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",

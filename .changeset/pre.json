@@ -15,5 +15,9 @@
     "@coraza/nestjs": "0.0.0",
     "@coraza/next": "0.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "fastify-pool-response-phase",
+    "initial-preview",
+    "rxmatch-fastpath"
+  ]
 }

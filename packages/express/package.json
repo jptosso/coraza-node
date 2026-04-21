@@ -1,6 +1,6 @@
 {
   "name": "@coraza/express",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.0",
   "description": "Express middleware for Coraza WAF.",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",
