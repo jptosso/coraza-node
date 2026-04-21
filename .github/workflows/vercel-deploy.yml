@@ -1,0 +1,127 @@
+name: Vercel deploy (express demo)
+
+# Deploys examples/express-app to the coraza-node-express-app Vercel
+# project. Disconnected from Vercel's Git integration so CI stays the
+# single source of truth for when and what ships.
+#
+# Why this lives in a workflow and not in vercel.json:
+#   - `examples/express-app/package.json` keeps `workspace:*` for the
+#     adapters so the monorepo's e2e + FTW jobs build the example
+#     against the current workspace source (what's about to land),
+#     not whatever is on npm.
+#   - The Vercel demo, though, should show what a real consumer
+#     installs — the published `@coraza/*@preview` packages. So we
+#     patch `workspace:*` → the current `packages/core` version at
+#     deploy time, in a throwaway working tree, then push that to
+#     Vercel via the CLI.
+#
+# Path filter scopes runs: only fires when the demo or anything it
+# transitively depends on actually changed.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'examples/express-app/**'
+      - 'examples/shared/**'
+      - 'packages/express/**'
+      - 'packages/core/**'
+      - 'packages/coreruleset/**'
+      - 'wasm/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'turbo.json'
+      - '.github/workflows/vercel-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: vercel-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Read the version we want to install from `packages/core/package.json`.
+      # Keeps the demo on whatever was most recently released from this repo
+      # without a second source of truth.
+      - name: Resolve target version
+        id: version
+        run: |
+          v=$(node -p "require('./packages/core/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Pinning demo to @coraza/*@$v"
+
+      # Patch the three published deps in-place. `example-shared` stays
+      # workspace:* — it's private, so the published tarball doesn't exist.
+      # We can't do `workspace:*` from outside pnpm, so for Vercel we drop
+      # it to a file: link against a copy.
+      - name: Patch demo package.json for Vercel
+        env:
+          TARGET_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd examples/express-app
+          node <<'NODE'
+          const fs = require('fs');
+          const pkgPath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          const v = process.env.TARGET_VERSION;
+          const pinned = ['@coraza/core', '@coraza/coreruleset', '@coraza/express'];
+          for (const name of pinned) {
+            if (pkg.dependencies[name]) pkg.dependencies[name] = v;
+          }
+          if (pkg.dependencies['@coraza/example-shared']) {
+            pkg.dependencies['@coraza/example-shared'] = 'file:./vendor/example-shared';
+          }
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+
+      - name: Vendor example-shared into the deploy payload
+        run: |
+          mkdir -p examples/express-app/vendor
+          cp -r examples/shared examples/express-app/vendor/example-shared
+
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+
+      # `vercel pull` fetches the project's prod env + build settings so
+      # `vercel build` produces output that matches the dashboard config.
+      - name: Pull Vercel project settings
+        working-directory: examples/express-app
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+
+      - name: Build
+        working-directory: examples/express-app
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel build --prod --token=$VERCEL_TOKEN
+
+      - name: Deploy
+        working-directory: examples/express-app
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
