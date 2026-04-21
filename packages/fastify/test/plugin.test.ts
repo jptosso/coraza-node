@@ -126,6 +126,38 @@ describe('@coraza/fastify', () => {
     await app.close()
   })
 
+  it('inspectResponse: true is a no-op (with a warning) under a pool-shaped WAF', async () => {
+    // Mirrors the Express adapter: when the WAF is a WAFPool, response
+    // phase hooks can't be registered safely (`processResponse` is async
+    // and races Fastify's serialisation path, producing
+    // `ERR_HTTP_HEADERS_SENT` crashes mid-request). The plugin should
+    // log a single warning at register time and then behave as if
+    // inspectResponse were false — not crash, not silently inspect.
+    const { waf, state } = mockWAF('block', {
+      onResponseBody: () => ({ ruleId: 777, action: 'deny', status: 403, data: 'leak' }),
+    })
+    // Make `waf.newTransaction` look async — the same shape check the
+    // plugin uses to distinguish a WAFPool from a sync WAF.
+    const realNew = waf.newTransaction.bind(waf)
+    const asyncNew = async function poolLikeNewTransaction() {
+      return realNew()
+    }
+    Object.defineProperty(waf, 'newTransaction', { value: asyncNew, writable: true })
+    const warn = vi.fn()
+    waf.logger = { ...waf.logger, warn }
+    const app = Fastify({ logger: false })
+    await app.register(coraza, { waf, inspectResponse: true })
+    app.get('/leaky', async () => ({ secret: 'ok' }))
+    const res = await app.inject({ method: 'GET', url: '/leaky' })
+    expect(res.statusCode).toBe(200) // response inspection skipped — no 403
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('inspectResponse=true is a no-op when using WAFPool'),
+    )
+    // The onResponseBody stub should never have been reached.
+    expect(state.txs.size).toBe(0) // onResponse closed the tx already
+    await app.close()
+  })
+
   it('skips response-body phase when isResponseBodyProcessable is false', async () => {
     const { app, state } = await appWith(
       { onResponseBody: () => ({ ruleId: 5, action: 'deny', status: 403, data: 'x' }) },
