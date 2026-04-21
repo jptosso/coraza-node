@@ -1,0 +1,9 @@
+{
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "develop": false
+    }
+  },
+  "ignoreCommand": "cd $(git rev-parse --show-toplevel) && git diff --quiet HEAD^ HEAD -- examples/express-app examples/shared packages/express packages/core packages/coreruleset wasm pnpm-lock.yaml pnpm-workspace.yaml turbo.json"
+}

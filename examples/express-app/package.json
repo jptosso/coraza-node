@@ -8,10 +8,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@coraza/core": "workspace:*",
-    "@coraza/coreruleset": "workspace:*",
+    "@coraza/core": "0.1.0-preview.0",
+    "@coraza/coreruleset": "0.1.0-preview.0",
     "@coraza/example-shared": "workspace:*",
-    "@coraza/express": "workspace:*",
+    "@coraza/express": "0.1.0-preview.0",
     "express": "^5.0.0"
   },
   "devDependencies": {

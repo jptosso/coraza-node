@@ -45,17 +45,17 @@ importers:
   examples/express-app:
     dependencies:
       '@coraza/core':
-        specifier: workspace:*
-        version: link:../../packages/core
+        specifier: 0.1.0-preview.0
+        version: 0.1.0-preview.0
       '@coraza/coreruleset':
-        specifier: workspace:*
-        version: link:../../packages/coreruleset
+        specifier: 0.1.0-preview.0
+        version: 0.1.0-preview.0
       '@coraza/example-shared':
         specifier: workspace:*
         version: link:../shared
       '@coraza/express':
-        specifier: workspace:*
-        version: link:../../packages/express
+        specifier: 0.1.0-preview.0
+        version: 0.1.0-preview.0(express@5.2.1)
       express:
         specifier: ^5.0.0
         version: 5.2.1
@@ -441,6 +441,20 @@ packages:
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
+
+  '@coraza/core@0.1.0-preview.0':
+    resolution: {integrity: sha512-bCtkckihgJi6lKKg62CE+XRuMc3FBgwPGvM+4jK3q5vOuBLfyFlYrX0EAw2u8ba1gPbboPyXQbse5EyN62Eanw==}
+    engines: {node: '>=22'}
+
+  '@coraza/coreruleset@0.1.0-preview.0':
+    resolution: {integrity: sha512-q1/gmJ/C7Cafth9PE5ZTk5kiJctKrnipxLKCO/+MLEukDPpuYK8YGKV8HqVkeGQeH34N8hkNcCoiAcswjs4agA==}
+    engines: {node: '>=22'}
+
+  '@coraza/express@0.1.0-preview.0':
+    resolution: {integrity: sha512-jptTP3T7Y+yj1x0Cbad+D4hkXzFSHLqL/1ImVKglT581UD9CBceis3eIUFhLMeq4Osvn7UOUb8NGyRJ1Im6vGA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      express: ^4.19.0 || ^5.0.0
 
   '@emnapi/runtime@1.10.0':
     resolution: {integrity: sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==}
@@ -2997,6 +3011,15 @@ snapshots:
 
   '@colors/colors@1.5.0':
     optional: true
+
+  '@coraza/core@0.1.0-preview.0': {}
+
+  '@coraza/coreruleset@0.1.0-preview.0': {}
+
+  '@coraza/express@0.1.0-preview.0(express@5.2.1)':
+    dependencies:
+      '@coraza/core': 0.1.0-preview.0
+      express: 5.2.1
 
   '@emnapi/runtime@1.10.0':
     dependencies:
