@@ -25,7 +25,11 @@ describe('createWAF / WAF.create', () => {
 
     expect(waf).toBeInstanceOf(WAF)
     expect(waf.mode).toBe('block')
-    expect(mockInstantiate).toHaveBeenCalledWith('ignored', expect.objectContaining({ debug: expect.any(Function) }))
+    expect(mockInstantiate).toHaveBeenCalledWith(
+      'ignored',
+      expect.objectContaining({ debug: expect.any(Function) }),
+      undefined,
+    )
 
     waf.destroy()
   })

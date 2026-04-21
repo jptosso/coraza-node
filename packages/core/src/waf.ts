@@ -28,7 +28,7 @@ export class WAF {
     const logger = config.logger ?? consoleLogger
     const mode: Mode = config.mode ?? 'detect'
     const source = config.wasmSource ?? defaultWasmPath()
-    const abi = await instantiate(source, logger)
+    const abi = await instantiate(source, logger, config.wasmModule)
     return WAF.fromAbi(abi, config.rules, mode, logger)
   }
 

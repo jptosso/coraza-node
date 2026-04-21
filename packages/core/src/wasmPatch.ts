@@ -11,6 +11,36 @@
 const SECTION_MEMORY = 5
 
 /**
+ * Return the memory section's `min` (in 64 KiB pages), or `null` if the
+ * module has no memory section. Used as a cheap check before deciding
+ * whether to patch — when the binary was built with
+ * `-extldflags --initial-memory=...` the value is already large enough
+ * and we can skip the rewrite entirely.
+ */
+export function readInitialMemoryPages(wasm: Uint8Array): number | null {
+  if (wasm.length < 8 || wasm[0] !== 0x00 || wasm[1] !== 0x61 || wasm[2] !== 0x73 || wasm[3] !== 0x6d) {
+    return null
+  }
+  let i = 8
+  while (i < wasm.length) {
+    const sectionId = wasm[i]!
+    i += 1
+    const [size, after] = readULEB(wasm, i)
+    i = after
+    const sectionEnd = i + size
+    if (sectionId === SECTION_MEMORY) {
+      const [count, afterCount] = readULEB(wasm, i)
+      if (count !== 1) return null
+      // limits: flags (1), then min (ULEB)
+      const [min] = readULEB(wasm, afterCount + 1)
+      return min
+    }
+    i = sectionEnd
+  }
+  return null
+}
+
+/**
  * Rewrite the memory section's `min` to `pages` if smaller. Returns the
  * patched bytes. Leaves non-memory sections untouched and does not
  * validate anything beyond what's needed to locate/rewrite memory.min.

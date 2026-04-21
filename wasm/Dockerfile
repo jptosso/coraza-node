@@ -38,10 +38,11 @@ COPY . .
 #   timetzdata                     — embed tz db (no /usr/share/zoneinfo under WASI)
 #   memoize_builders               — Coraza internal perf optimization
 #   coraza.rule.no_regex_multiline — smaller regex engine
-# The TS loader rewrites the WASM's memory section `min` to ~137 MiB
-# (packages/core/src/wasmPatch.ts) before WebAssembly.compile. That's
-# where the headroom for CRS regex compilation comes from. Leaving
-# --initial-memory alone here keeps the artifact small on disk.
+# `--initial-memory=137625600` (2100 * 65536) bakes CRS's ~137 MiB
+# headroom into the memory section at link time — no post-build rewrite.
+# CRS's regex compilation allocates heavily enough to OOB the default
+# 2-page TinyGo memory before the WASI allocator can memory.grow.
+# Keep in sync with CORAZA_INITIAL_PAGES in packages/core/src/wasm.ts.
 RUN mkdir -p /out && tinygo build \
       -target=wasip1 \
       -o /out/coraza.wasm \
@@ -50,7 +51,7 @@ RUN mkdir -p /out && tinygo build \
       -gc=precise \
       -scheduler=none \
       -panic=trap \
-      -ldflags="-extldflags '-z stack-size=4194304'" \
+      -ldflags="-extldflags '-z stack-size=4194304 --initial-memory=137625600'" \
       -tags="no_fs_access timetzdata memoize_builders coraza.rule.no_regex_multiline" \
       . \
   && ls -la /out/coraza.wasm

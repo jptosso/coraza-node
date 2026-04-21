@@ -17,15 +17,15 @@
 // (pino-http convention) we prefer it; otherwise we use the WAF's logger.
 
 import type {
-  WAF,
-  WAFPool,
+  AnyWAF,
+  WAFLike,
   Transaction,
   Interruption,
   Logger,
   RequestInfo,
   SkipOptions,
 } from '@coraza/core'
-import { buildSkipPredicate, pathOf } from '@coraza/core'
+import { buildSkipPredicate, consoleLogger, pathOf } from '@coraza/core'
 import type { Request, RequestHandler, Response } from 'express'
 
 export interface CorazaExpressOptions {
@@ -33,8 +33,11 @@ export interface CorazaExpressOptions {
    * A `WAF` (single instance, sync) or a `WAFPool` (worker_threads, async).
    * Pools scale linearly up to CPU count with a small latency overhead —
    * prefer them under production load. See @coraza/core for construction.
+   *
+   * Also accepts a promise of either, so modules that can't do top-level
+   * await (CJS transpilers, Next middleware) can defer construction.
    */
-  waf: WAF | WAFPool
+  waf: WAFLike
   /**
    * Override how a block decision is turned into an HTTP response.
    * Default: sets status + plain-text body with the interruption's rule id.
@@ -74,18 +77,47 @@ const encoder = new TextEncoder()
 
 export function coraza(options: CorazaExpressOptions): RequestHandler {
   const {
-    waf,
+    waf: wafOrPromise,
     onBlock = defaultBlock,
     inspectResponse = false,
     onWAFError = 'block',
   } = options
   const shouldSkip = options.skip === false ? () => false : buildSkipPredicate(options.skip)
 
+  // Resolve the (possibly deferred) WAF on first use and memoize. Accepting
+  // a Promise keeps symmetry with @coraza/next's middleware shape and lets
+  // callers avoid top-level await.
+  let wafRef: AnyWAF | null = null
+  const ensureWAF = async (): Promise<AnyWAF> => {
+    if (wafRef) return wafRef
+    wafRef = await wafOrPromise
+    return wafRef
+  }
+
   // `waf` is either a sync WAF or an async WAFPool. Both expose the same
   // surface (newTransaction / Transaction has the same method names). We
   // `await` every call so the middleware works against either.
   return async function corazaMiddleware(req, res, next) {
     if (shouldSkip(pathOf(req.originalUrl || req.url))) {
+      next()
+      return
+    }
+    let waf: AnyWAF
+    try {
+      waf = await ensureWAF()
+    } catch (err) {
+      // If the WAF promise itself rejects we can't open a transaction or
+      // route through onBlock's logger. Treat as fail-closed by default.
+      const log = (req as ReqWithLog).log ?? consoleLogger
+      log.error('coraza: waf promise rejected', { err: (err as Error).message })
+      if (onWAFError === 'block' && !res.headersSent) {
+        onBlock(
+          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
+          req,
+          res,
+        )
+        return
+      }
       next()
       return
     }
@@ -175,7 +207,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
 
 // A union of Transaction (sync) and WorkerTransaction (async) — both have
 // the same method names; differing return types get uniformly awaited.
-type AnyTransaction = Awaited<ReturnType<(WAF | WAFPool)['newTransaction']>>
+type AnyTransaction = Awaited<ReturnType<AnyWAF['newTransaction']>>
 
 
 export function defaultBlock(interruption: Interruption, _req: Request, res: Response): void {

@@ -24,8 +24,8 @@
 
 import fp from 'fastify-plugin'
 import type {
-  WAF,
-  WAFPool,
+  AnyWAF,
+  WAFLike,
   Transaction,
   WorkerTransaction,
   Interruption,
@@ -35,8 +35,12 @@ import { buildSkipPredicate, pathOf } from '@coraza/core'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 
 export interface CorazaFastifyOptions {
-  /** Single WAF or a WAFPool for multi-core scaling. */
-  waf: WAF | WAFPool
+  /**
+   * Single WAF or a WAFPool for multi-core scaling. Also accepts a
+   * promise of either, so modules that can't do top-level await can
+   * defer construction.
+   */
+  waf: WAFLike
   onBlock?: (
     interruption: Interruption,
     req: FastifyRequest,
@@ -62,12 +66,17 @@ type WithTx = FastifyRequest & { [TX_SYMBOL]?: AnyTx }
 
 const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opts) => {
   const {
-    waf,
+    waf: wafOrPromise,
     onBlock = defaultBlock,
     inspectResponse = false,
     onWAFError = 'block',
   } = opts
   const shouldSkip = opts.skip === false ? () => false : buildSkipPredicate(opts.skip)
+
+  // Resolve the (possibly deferred) WAF once, on plugin register — plugin
+  // registration is already async so we can safely `await` here and every
+  // subsequent hook sees a settled value.
+  const waf: AnyWAF = await wafOrPromise
 
   fastify.decorateRequest(TX_SYMBOL as unknown as string, null)
 

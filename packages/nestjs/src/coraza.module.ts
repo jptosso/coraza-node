@@ -1,16 +1,14 @@
 import { DynamicModule, HttpException, Module, type Provider } from '@nestjs/common'
 import {
   createWAF,
-  type WAF,
-  type WAFPool,
+  type AnyWAF,
+  type WAFLike,
   type WAFConfig,
   type SkipOptions,
   type Interruption,
 } from '@coraza/core'
 import { CorazaGuard } from './coraza.guard.js'
 import { CORAZA_OPTIONS, CORAZA_WAF } from './tokens.js'
-
-type AnyWAF = WAF | WAFPool
 
 /**
  * NestJS `CorazaModule.forRoot` options.
@@ -61,7 +59,7 @@ interface CorazaNestBuiltOptions {
    * `WAFConfig` fields (rules / mode / etc.) — if `waf` is set, those
    * are ignored.
    */
-  waf: AnyWAF | Promise<AnyWAF>
+  waf: WAFLike
 }
 
 export interface CorazaNestAsyncOptions {

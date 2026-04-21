@@ -23,8 +23,8 @@
 //   - Logging: Next has no per-request logger; we use the WAF's.
 
 import type {
-  WAF,
-  WAFPool,
+  AnyWAF,
+  WAFLike,
   Interruption,
   Logger,
   SkipOptions,
@@ -38,7 +38,7 @@ export interface CorazaNextOptions {
    * modules that can't do top-level await (CJS consumers) can defer
    * construction.
    */
-  waf: WAF | WAFPool | Promise<WAF | WAFPool>
+  waf: WAFLike
   onBlock?: (interruption: Interruption, req: NextRequest) => Response
   // No `inspectResponse` on this adapter by design — Next's middleware
   // runs on the request boundary and cannot read the Route Handler's
@@ -54,8 +54,6 @@ export interface CorazaNextOptions {
    */
   onWAFError?: 'allow' | 'block'
 }
-
-type AnyWAF = WAF | WAFPool
 
 /**
  * Build a Next.js middleware. Matches the adapter shape used by the

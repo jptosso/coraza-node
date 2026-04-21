@@ -23,6 +23,14 @@ if (!parentPort) {
   throw new Error('@coraza/core pool-worker: must run inside a worker_thread')
 }
 
+// The main thread compiles the WASM once and ships the module via
+// workerData (structured clone transfers the compiled code by reference).
+// We merge it into the init config so createWAF skips its own compile.
+// See pool.ts `WAFPool.create` for the rationale.
+const sharedWasmModule: WebAssembly.Module | undefined = (
+  workerData as { wasmModule?: WebAssembly.Module } | undefined
+)?.wasmModule
+
 type InitMsg = { reqId: number; type: 'init'; config: WAFConfig }
 type NewTxMsg = { reqId: number; type: 'newTx' }
 type ProcMsg = {
@@ -56,10 +64,19 @@ let nextTxId = 0
 parentPort.on('message', async (msg: Msg) => {
   try {
     switch (msg.type) {
-      case 'init':
-        waf = await createWAF(msg.config)
+      case 'init': {
+        // Fall back to the workerData-shipped module if init didn't carry
+        // one. Both are populated by WAFPool.create today; honoring either
+        // keeps this robust against future callers that only set one path.
+        const initConfig: WAFConfig = msg.config.wasmModule
+          ? msg.config
+          : sharedWasmModule
+            ? { ...msg.config, wasmModule: sharedWasmModule }
+            : msg.config
+        waf = await createWAF(initConfig)
         parentPort!.postMessage({ reqId: msg.reqId, ok: true })
         break
+      }
 
       case 'newTx': {
         if (!waf) throw new Error('worker not initialized')
@@ -176,5 +193,3 @@ process.on('unhandledRejection', (err) => {
   })
 })
 
-// workerData is only referenced to allow future configuration plumbing.
-void workerData

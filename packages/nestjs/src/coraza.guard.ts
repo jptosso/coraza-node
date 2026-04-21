@@ -16,8 +16,7 @@ import {
   Logger,
 } from '@nestjs/common'
 import type {
-  WAF,
-  WAFPool,
+  AnyWAF,
   Transaction,
   WorkerTransaction,
   Interruption,
@@ -28,8 +27,26 @@ import { CORAZA_WAF, CORAZA_OPTIONS } from './tokens.js'
 
 type OnBlock = (interruption: Interruption) => HttpException
 
-const defaultOnBlock: OnBlock = (i) =>
+/**
+ * Default `onBlock` for `CorazaModule.forRoot`: a 403-ish HttpException
+ * carrying the matched rule id. Exported so consumers who want to wrap
+ * the default can delegate to it:
+ *
+ *   CorazaModule.forRoot({
+ *     waf,
+ *     onBlock: (i) => {
+ *       metrics.increment('waf.block', { rule: i.ruleId })
+ *       return defaultHttpException(i)
+ *     },
+ *   })
+ *
+ * Mirrors `defaultBlock` from `@coraza/express` / `@coraza/fastify` /
+ * `@coraza/next` for API symmetry across the four adapters.
+ */
+export const defaultHttpException: OnBlock = (i) =>
   new HttpException(`Request blocked by Coraza (rule ${i.ruleId})`, i.status || 403)
+
+const defaultOnBlock = defaultHttpException
 
 // Minimal shapes of Express/Fastify request+reply that NestJS exposes via
 // switchToHttp(). We avoid a hard dep on either framework.
@@ -47,7 +64,6 @@ interface HttpReq {
 
 const encoder = new TextEncoder()
 type AnyTx = Transaction | WorkerTransaction
-type AnyWAF = WAF | WAFPool
 
 @Injectable()
 export class CorazaGuard implements CanActivate {
