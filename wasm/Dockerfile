@@ -47,11 +47,11 @@ RUN mkdir -p /out && tinygo build \
       -o /out/coraza.wasm \
       -opt=2 \
       -no-debug \
-      -gc=custom \
+      -gc=precise \
       -scheduler=none \
       -panic=trap \
       -ldflags="-extldflags '-z stack-size=4194304'" \
-      -tags="custommalloc no_fs_access timetzdata memoize_builders coraza.rule.no_regex_multiline" \
+      -tags="no_fs_access timetzdata memoize_builders coraza.rule.no_regex_multiline" \
       . \
   && ls -la /out/coraza.wasm
 
