@@ -141,8 +141,10 @@ tests for this module (`rxprefilter_test.go`, `rxprefilter_crs_test.go`)
 that our port doesn't ship yet.
 
 **Follow-up**: port the rxprefilter tests and include them in our CI.
-Tracked in [issue-tbd]. Until then, treat any new rxprefilter behavior
-with suspicion; disable with a build-tag flag if a regression surfaces.
+Until then, treat any new rxprefilter behavior with suspicion; disable
+with a build-tag flag if a regression surfaces. File an issue at
+<https://github.com/jptosso/coraza-node/issues> if you hit a mismatch
+against upstream behaviour.
 
 ## Audit checklist for new perf changes
 

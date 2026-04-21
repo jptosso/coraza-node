@@ -1,9 +1,36 @@
 import { DynamicModule, HttpException, Module, type Provider } from '@nestjs/common'
-import { createWAF, type WAF, type WAFConfig, type SkipOptions, type Interruption } from '@coraza/core'
+import {
+  createWAF,
+  type WAF,
+  type WAFPool,
+  type WAFConfig,
+  type SkipOptions,
+  type Interruption,
+} from '@coraza/core'
 import { CorazaGuard } from './coraza.guard.js'
 import { CORAZA_OPTIONS, CORAZA_WAF } from './tokens.js'
 
-export interface CorazaNestOptions extends WAFConfig {
+type AnyWAF = WAF | WAFPool
+
+/**
+ * NestJS `CorazaModule.forRoot` options.
+ *
+ * Two shapes are accepted:
+ *
+ *   - **Built WAF**: pass `{ waf }` (a `WAF` or `WAFPool` from
+ *     `@coraza/core`). Matches the Express / Fastify / Next adapter
+ *     shape. Use this for production (almost certainly a `WAFPool`
+ *     sized to `os.availableParallelism()`).
+ *   - **Inline config**: pass a `WAFConfig` (rules / mode / logger /
+ *     wasmSource) and the module constructs a single-threaded `WAF`
+ *     internally. Convenient for tests and small services; not
+ *     recommended for long-running HTTP servers — see the pool-mode
+ *     note in the docs.
+ */
+export type CorazaNestOptions = CorazaNestCommonOptions &
+  (CorazaNestBuiltOptions | WAFConfig)
+
+interface CorazaNestCommonOptions {
   /**
    * When true, register CorazaGuard as APP_GUARD so every route is protected.
    * Default true.
@@ -28,10 +55,23 @@ export interface CorazaNestOptions extends WAFConfig {
   onWAFError?: 'allow' | 'block'
 }
 
+interface CorazaNestBuiltOptions {
+  /**
+   * A pre-built `WAF` or `WAFPool`. Mutually exclusive with inline
+   * `WAFConfig` fields (rules / mode / etc.) — if `waf` is set, those
+   * are ignored.
+   */
+  waf: AnyWAF | Promise<AnyWAF>
+}
+
 export interface CorazaNestAsyncOptions {
   useFactory: (...args: unknown[]) => Promise<CorazaNestOptions> | CorazaNestOptions
   inject?: readonly unknown[]
   globalGuard?: boolean
+}
+
+function hasBuiltWAF(opts: CorazaNestOptions): opts is CorazaNestCommonOptions & CorazaNestBuiltOptions {
+  return 'waf' in opts && (opts as CorazaNestBuiltOptions).waf !== undefined
 }
 
 @Module({})
@@ -79,7 +119,10 @@ function wafProvider(): Provider {
   return {
     provide: CORAZA_WAF,
     inject: [CORAZA_OPTIONS],
-    useFactory: async (opts: CorazaNestOptions): Promise<WAF> => createWAF(opts),
+    useFactory: async (opts: CorazaNestOptions): Promise<AnyWAF> => {
+      if (hasBuiltWAF(opts)) return opts.waf
+      return createWAF(opts as WAFConfig)
+    },
   }
 }
 

@@ -303,17 +303,24 @@ if ! [[ -s "${OUT_JSON}" ]]; then
   exit 1
 fi
 
-# go-ftw's JSON shape varies slightly by version; probe both names.
+# go-ftw v2 JSON shape:
+#   {"run": <N>, "success": [...], "failed": [...], "ignored": [...], "skipped": [...], ...}
+# Each is an array of test IDs. "run" is the total COUNT of tests
+# evaluated. Older go-ftw wrapped stats under `.stats`; probe both.
 if command -v jq >/dev/null 2>&1; then
-  total=$(jq -r '(.stats.totalCount // .stats.total // (.Run|length) // 0)' "${OUT_JSON}")
-  success=$(jq -r '(.stats.success // .stats.passed // ((.Run // []) | map(select(.Pass==true)) | length) // 0)' "${OUT_JSON}")
-  failed=$(jq -r '(.stats.failed // ((.Run // []) | map(select(.Pass==false)) | length) // 0)' "${OUT_JSON}")
-  skipped=$(jq -r '(.stats.skipped // .stats.ignored // 0)' "${OUT_JSON}")
+  total=$(jq -r '(.run // .stats.totalCount // .stats.total // 0)' "${OUT_JSON}")
+  success=$(jq -r '((.success // []) | length) // .stats.success // .stats.passed // 0' "${OUT_JSON}")
+  failed=$(jq -r '((.failed // []) | length) // .stats.failed // 0' "${OUT_JSON}")
+  ignored=$(jq -r '((.ignored // []) | length) // .stats.skipped // .stats.ignored // 0' "${OUT_JSON}")
+  skipped=$(jq -r '((.skipped // []) | length) // 0' "${OUT_JSON}")
+  # v2's "skipped" is tests not matched by --include; "ignored" is
+  # tests excluded via testoverride.ignore. For threshold purposes we
+  # want the pass rate over all tests the WAF actually saw the request
+  # for — i.e. total - skipped - ignored.
+  skipped=$(( skipped + ignored ))
 else
-  total=$(grep -oE '"total[A-Za-z]*"\s*:\s*[0-9]+' "${OUT_JSON}" | head -1 | grep -oE '[0-9]+$' || echo 0)
-  success=$(grep -oE '"(success|passed)"\s*:\s*[0-9]+' "${OUT_JSON}" | head -1 | grep -oE '[0-9]+$' || echo 0)
-  failed=$(grep -oE '"failed"\s*:\s*[0-9]+' "${OUT_JSON}" | head -1 | grep -oE '[0-9]+$' || echo 0)
-  skipped=$(grep -oE '"(skipped|ignored)"\s*:\s*[0-9]+' "${OUT_JSON}" | head -1 | grep -oE '[0-9]+$' || echo 0)
+  total=$(grep -oE '"run"\s*:\s*[0-9]+' "${OUT_JSON}" | head -1 | grep -oE '[0-9]+$' || echo 0)
+  success=0; failed=0; skipped=0
 fi
 
 considered=$(( total - skipped ))

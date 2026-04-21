@@ -215,45 +215,6 @@ async function emitBlock(
   await onBlock(interruption, req, reply)
 }
 
-export function headersOf(
-  h: Record<string, string | string[] | number | undefined>,
-): [string, string][] {
-  const out: [string, string][] = []
-  for (const [k, v] of Object.entries(h)) {
-    if (v === undefined) continue
-    if (Array.isArray(v)) {
-      for (const item of v) out.push([k, String(item)])
-    } else {
-      out.push([k, String(v)])
-    }
-  }
-  return out
-}
-
-const encoder = new TextEncoder()
-
-export function serializeBody(body: unknown): Uint8Array | undefined {
-  if (body === undefined || body === null) return undefined
-  if (body instanceof Uint8Array) return body
-  if (typeof body === 'string') return encoder.encode(body)
-  try {
-    return encoder.encode(JSON.stringify(body))
-  } catch {
-    return undefined
-  }
-}
-
-export function payloadToBytes(payload: unknown): Uint8Array | undefined {
-  if (payload instanceof Uint8Array) return payload
-  if (typeof payload === 'string') return encoder.encode(payload)
-  if (payload && typeof payload === 'object') {
-    try {
-      return encoder.encode(JSON.stringify(payload))
-    } catch {
-      return undefined
-    }
-  }
-  return undefined
-}
+import { headersOf, serializeBody, payloadToBytes } from './helpers.js'
 
 export type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'

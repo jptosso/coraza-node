@@ -7,7 +7,7 @@ export default defineConfig({
   dts: { entry: ['src/index.ts', 'src/internal.ts'] },
   sourcemap: true,
   clean: true,
-  target: 'node20',
+  target: 'node22',
   splitting: false,
   async onSuccess() {
     mkdirSync('dist/wasm', { recursive: true })

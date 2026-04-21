@@ -40,12 +40,11 @@ export interface CorazaNextOptions {
    */
   waf: WAF | WAFPool | Promise<WAF | WAFPool>
   onBlock?: (interruption: Interruption, req: NextRequest) => Response
-  /**
-   * If true, also inspect the response. Not implemented in v1 — Next
-   * middleware can't intercept the response stream easily without a
-   * route-handler wrapper.
-   */
-  inspectResponse?: boolean
+  // No `inspectResponse` on this adapter by design — Next's middleware
+  // runs on the request boundary and cannot read the Route Handler's
+  // response body. CRS's RESPONSE-* families therefore can't fire on a
+  // Next deployment. See README and docs/threat-model.md.
+
   /** Bypass Coraza for static/media paths. Defaults skip /_next/static, etc. */
   skip?: SkipOptions | false
   /**

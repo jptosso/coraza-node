@@ -43,6 +43,9 @@ testoverride:
     "933120-2": "[upstream-coraza] match_regex is ModSec-specific; not supported"
 
     # ---- [node-http] (shared) ------------------------------------------
+    "920160-4": "[node-http] Non-numeric Content-Length: Node auto-corrects before WAF"
+    "920181-1": "[node-http] Content-Length+Transfer-Encoding: Node rejects before WAF"
+    "920272-5": "[node-http] High-bit URI char: Node/WAF differ on 920272 expect vs fire"
     "920274-1": "[node-http] URI charset edge case; Node normalizes before WAF"
     "920280-3": "[node-http] Empty Host header rewritten by Node http"
     "920290-4": "[node-http] Empty Host header rewritten by Node http"

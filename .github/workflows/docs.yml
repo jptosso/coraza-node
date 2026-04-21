@@ -37,7 +37,7 @@ jobs:
           # Primary: the designed docs site.
           cp -r docs/site/. public/
           # Also publish the markdown docs as raw files so internal links
-          # (docs/threat-model.md, docs/performance.md, etc.) resolve when
+          # (docs/threat-model.md) resolve when
           # visitors follow them from the static site.
           mkdir -p public/md
           for f in docs/*.md; do
