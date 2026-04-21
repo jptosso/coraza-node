@@ -101,7 +101,7 @@
 
       <div class="hero-pills">
         <span class="pill"><span class="pill-k">npm</span><code>@coraza/core</code></span>
-        <span class="pill"><span class="pill-k">runtime</span>Node ≥ 20</span>
+        <span class="pill"><span class="pill-k">runtime</span>Node ≥ 22</span>
         <span class="pill"><span class="pill-k">engine</span>Coraza v3 · WASM</span>
         <span class="pill"><span class="pill-k">ruleset</span>CRS 4.10 bundled</span>
         <span class="pill pill-ok"><span class="pill-k">license</span>Apache-2.0</span>
@@ -701,7 +701,7 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf }))</code
         <h3 class="h3">Fail-open for availability-critical endpoints</h3>
         <p>By default, a WAF crash returns 503. If you run a critical endpoint where a correctness/availability trade-off favors availability, flip <code>onWAFError</code>.</p>
 <pre class="code"><code><span class="c-c">// NOT recommended for endpoints exposed to the public internet.</span>
-<span class="c-c">// See docs/security.md before enabling.</span>
+<span class="c-c">// See docs/threat-model.md before enabling.</span>
 app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFError: <span class="c-s">'allow'</span> }))</code></pre>
       </div>
     </section>
@@ -746,7 +746,7 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFErr
         <div class="callout-badge">Known caveats</div>
         <div>
           Full threat model + caveats (ReDoS via V8 Irregexp, Unicode case-insensitive, UTF-8 encoding, rxprefilter accuracy) are in
-          <a href="https://github.com/jptosso/coraza-node/blob/main/docs/security.md">docs/security.md</a>.
+          <a href="https://github.com/jptosso/coraza-node/blob/main/docs/threat-model.md">docs/threat-model.md</a>.
           Escape hatch: <code>CORAZA_HOST_RX=off</code> forces every <code>@rx</code> pattern through Go's linear-time regex
           instead of V8's backtracking engine.
         </div>

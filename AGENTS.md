@@ -74,7 +74,7 @@ priority:
   the request flowing into the WAF even when data is oversized. Never
   throw into a path the adapter might catch-and-next.
 
-See `docs/security.md` for the threat model, known caveats (ReDoS,
+See `docs/threat-model.md` for the threat model, known caveats (ReDoS,
 Unicode case-insensitive, UTF-8 encoding), and the fail-closed checklist.
 
 ## Mandatory security checks & risk analysis (every change)
@@ -104,7 +104,7 @@ stop and investigate until you do.
    filtering, normalization, caching — any of these can make Coraza
    evaluate a different input than what the attacker actually sent.
    Confirm behavioral equivalence or document the gap in
-   `docs/security.md`.
+   `docs/threat-model.md`.
 
 4. **Does it change when rules fire?** Skipping a phase, reordering
    calls, batching, short-circuiting on a predicate — these can cause

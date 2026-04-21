@@ -154,7 +154,7 @@ describe('@coraza/express', () => {
     const app = appWith(coraza({ waf }))
     const res = await request(app).get('/hi')
     // Default is fail-closed — an error in the WAF returns 503. See
-    // docs/security.md: a crafted crash must not become a bypass.
+    // docs/threat-model.md: a crafted crash must not become a bypass.
     expect(res.status).toBe(503)
   })
 

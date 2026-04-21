@@ -17,7 +17,7 @@
 //     + preHandler sequence would miss CRS's phase-2 anomaly evaluator
 //     on body-less requests, bypassing CRS's anomaly-score rule 949110.
 //   - Fails closed on any WAF error (default `onWAFError: 'block'`).
-//     Matches docs/security.md's threat model.
+//     Matches docs/threat-model.md's threat model.
 //   - Logging: Fastify ships Pino. We forward to `request.log` (scoped)
 //     for per-request log lines and fall back to `fastify.log` for
 //     init-time messages.

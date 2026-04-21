@@ -63,7 +63,7 @@ export async function instantiate(
   //
   // Escape hatch: set `CORAZA_HOST_RX=off` to force every pattern to
   // fall back to Go's stdlib regex inside the WASM. Use this if you're
-  // worried about V8's backtracking ReDoS surface — see docs/security.md.
+  // worried about V8's backtracking ReDoS surface — see docs/threat-model.md.
   const hostRxDisabled = process.env.CORAZA_HOST_RX === 'off'
   const hostRx = createHostRegex()
 

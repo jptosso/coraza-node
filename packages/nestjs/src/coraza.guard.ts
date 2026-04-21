@@ -100,7 +100,7 @@ export class CorazaGuard implements CanActivate {
 
       // Phases 1 and 2 run atomically via the fused bundle call so CRS's
       // anomaly evaluator at phase 2 always fires, including on body-less
-      // GET requests. See docs/security.md.
+      // GET requests. See docs/threat-model.md.
       const interrupted = await tx.processRequestBundle(
         {
           method: req.method,

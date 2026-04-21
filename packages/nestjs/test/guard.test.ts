@@ -80,7 +80,7 @@ describe('CorazaGuard', () => {
 
   it('runs body phase regardless of isRequestBodyAccessible (bundle always fires phase 2)', async () => {
     // Fused bundle runs phase 2 even on body-less verbs so CRS's
-    // anomaly-score evaluator always fires. See docs/security.md.
+    // anomaly-score evaluator always fires. See docs/threat-model.md.
     const { waf, state } = mockWAF('block', {
       onBody: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
     })

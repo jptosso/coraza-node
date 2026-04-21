@@ -18,7 +18,7 @@
 // Design notes:
 //   - Uses `processRequestBundle` so phases 1 and 2 run atomically; CRS's
 //     phase-2 anomaly evaluator always fires, including on body-less GETs
-//     (see docs/security.md).
+//     (see docs/threat-model.md).
 //   - Fails closed on any WAF error (default `onWAFError: 'block'`).
 //   - Logging: Next has no per-request logger; we use the WAF's.
 
@@ -51,7 +51,7 @@ export interface CorazaNextOptions {
   /**
    * What to do if the WAF throws mid-request. Default 'block' (fail
    * closed with 503). 'allow' is an opt-in availability-over-security
-   * knob; see docs/security.md before flipping it.
+   * knob; see docs/threat-model.md before flipping it.
    */
   onWAFError?: 'allow' | 'block'
 }

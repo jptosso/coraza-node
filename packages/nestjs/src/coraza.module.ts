@@ -23,7 +23,7 @@ export interface CorazaNestOptions extends WAFConfig {
   onBlock?: (interruption: Interruption) => HttpException
   /**
    * What to do if the WAF throws mid-request. Default `'block'` (503).
-   * `'allow'` lets the request through; see docs/security.md.
+   * `'allow'` lets the request through; see docs/threat-model.md.
    */
   onWAFError?: 'allow' | 'block'
 }

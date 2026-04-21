@@ -210,8 +210,11 @@ jobs:
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: pnpm -F @coraza/${{ matrix.adapter }} exec playwright install-deps chromium
 
-      - name: Build the adapter + its deps
-        run: pnpm turbo run build --filter=@coraza/${{ matrix.adapter }}...
+      # Build the example app's full dependency graph. That's the adapter
+      # + its own deps (core) AND @coraza/coreruleset, which every example
+      # server imports directly but isn't a dep of the adapter package.
+      - name: Build example app + deps
+        run: pnpm turbo run build --filter=@coraza/example-${{ matrix.adapter }}...
       - name: E2E
         run: pnpm -F @coraza/${{ matrix.adapter }} e2e
 
