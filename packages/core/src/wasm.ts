@@ -34,14 +34,25 @@ async function resolveBytes(src: WasmSource): Promise<Uint8Array> {
  * Caller responsibilities:
  *   - Pass a logger (or accept `console`) for `env.log` host imports.
  *   - Hold the returned Abi; disposal is by GC (WASM instance has no explicit close).
+ *
+ * When `precompiled` is supplied, skips the read+patch+compile step and
+ * reuses the already-compiled module. `source` is ignored in that case.
+ * Used by `WAFPool` to amortize WASM compilation across N workers — see
+ * `compileWasmModule` below.
  */
 export async function instantiate(
   source: WasmSource,
   logger: Logger,
+  precompiled?: WebAssembly.Module,
 ): Promise<Abi> {
-  const bytes = await resolveBytes(source)
-  const patched = patchInitialMemory(bytes, CORAZA_INITIAL_PAGES)
-  const module = await WebAssembly.compile(patched as unknown as BufferSource)
+  let module: WebAssembly.Module
+  if (precompiled) {
+    module = precompiled
+  } else {
+    const bytes = await resolveBytes(source)
+    const patched = patchInitialMemory(bytes, CORAZA_INITIAL_PAGES)
+    module = await WebAssembly.compile(patched as unknown as BufferSource)
+  }
 
   // Swap between node:wasi (full-featured, native binding) and our own
   // 120-line JS shim based on CORAZA_WASI=minimal. The minimal shim is
@@ -116,4 +127,18 @@ export async function instantiate(
 
   const abi = new Abi(exports)
   return abi
+}
+
+/**
+ * Read + patch + compile the Coraza WASM once. Returns a `WebAssembly.Module`
+ * that can be passed to `instantiate` via its `precompiled` argument as many
+ * times as needed. Used by `WAFPool` to amortize the ~200-400 ms compile
+ * across N workers — Node has no cross-worker code cache for local files
+ * (https://github.com/nodejs/node/issues/36671), so without this each worker
+ * would re-compile the same ~5 MB binary independently.
+ */
+export async function compileWasmModule(source: WasmSource): Promise<WebAssembly.Module> {
+  const bytes = await resolveBytes(source)
+  const patched = patchInitialMemory(bytes, CORAZA_INITIAL_PAGES)
+  return WebAssembly.compile(patched as unknown as BufferSource)
 }

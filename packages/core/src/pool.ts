@@ -19,6 +19,7 @@
 import { Worker } from 'node:worker_threads'
 import { fileURLToPath } from 'node:url'
 import { consoleLogger } from './logger.js'
+import { compileWasmModule } from './wasm.js'
 import type {
   Interruption,
   Logger,
@@ -69,12 +70,34 @@ export class WAFPool {
     const logger = config.logger ?? consoleLogger
     const mode = config.mode ?? 'detect'
 
+    // Compile the WASM module once on the main thread and share it with
+    // every worker via workerData (structured clone preserves the compiled
+    // module by reference in Node 22+). Without this, each worker would
+    // independently re-compile the ~5 MB binary: Node has no cross-worker
+    // code cache for local files (nodejs/node#36671). Respects an already
+    // pre-compiled module supplied by the caller.
+    const wasmModule =
+      config.wasmModule ??
+      (await compileWasmModule(
+        config.wasmSource ?? new URL('./wasm/coraza.wasm', import.meta.url),
+      ))
+    // Forward the compiled module to each worker via WAFConfig. No need to
+    // also ship `wasmSource` — the worker's createWAF short-circuits on
+    // `wasmModule` before reading any bytes. Strip `logger` because it
+    // carries function references and structured clone (MessagePort) can't
+    // transfer those — workers log through their own consoleLogger.
+    const { logger: _workerLoggerStripped, ...configCloneable } = config
+    void _workerLoggerStripped
+    const workerConfig: WAFConfig = { ...configCloneable, wasmModule }
+
     const slots: WorkerSlot[] = []
-    for (let i = 0; i < size; i++) slots.push(spawnSlot(logger))
+    for (let i = 0; i < size; i++) slots.push(spawnSlot(logger, wasmModule))
 
     // Init every worker in parallel, reject fast if any fails.
     await Promise.all(
-      slots.map((slot) => slot.ready.then(() => callSlot<void>(slot, { type: 'init', config }))),
+      slots.map((slot) =>
+        slot.ready.then(() => callSlot<void>(slot, { type: 'init', config: workerConfig })),
+      ),
     )
 
     const pool = new WAFPool(slots, logger, mode)
@@ -296,12 +319,15 @@ function defaultSize(): number {
     : os.cpus().length
 }
 
-function spawnSlot(logger: Logger): WorkerSlot {
+function spawnSlot(logger: Logger, wasmModule?: WebAssembly.Module): WorkerSlot {
   const workerUrl = new URL('./pool-worker.js', import.meta.url)
   const worker = new Worker(fileURLToPath(workerUrl), {
     // Don't inherit the parent's loader args (e.g. --import tsx) — the worker
     // runs the pre-compiled pool-worker.js and doesn't need the TS loader.
     execArgv: [],
+    // Structured clone carries the compiled WebAssembly.Module by reference
+    // so the worker skips its own compile step.
+    workerData: wasmModule ? { wasmModule } : undefined,
   })
   const pending = new Map<number, Pending>()
   const slot: WorkerSlot = {

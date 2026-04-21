@@ -28,7 +28,12 @@ export class WAF {
     const logger = config.logger ?? consoleLogger
     const mode: Mode = config.mode ?? 'detect'
     const source = config.wasmSource ?? defaultWasmPath()
-    const abi = await instantiate(source, logger)
+    // Omit the 3rd arg entirely when no pre-compiled module is supplied.
+    // Passing `undefined` explicitly would break existing callers that
+    // assert `toHaveBeenCalledWith(source, logger)` with an exact arity.
+    const abi = await (config.wasmModule
+      ? instantiate(source, logger, config.wasmModule)
+      : instantiate(source, logger))
     return WAF.fromAbi(abi, config.rules, mode, logger)
   }
 

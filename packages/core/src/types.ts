@@ -16,6 +16,17 @@ export interface WAFConfig {
   logger?: Logger
   /** Override the WASM binary (useful for tests / pinning a specific build). */
   wasmSource?: ArrayBufferLike | Uint8Array | URL | string
+  /**
+   * Pre-compiled WASM module. When set, skips the read+patch+compile step
+   * and instantiates directly. Used by `WAFPool` to compile once on the main
+   * thread and share the compiled module with every worker via structured
+   * clone (modules transfer by reference in V8, carrying compiled code).
+   * Node has no cross-worker code cache for local files
+   * (https://github.com/nodejs/node/issues/36671), so sharing the module
+   * turns pool boot from N × compile-time into 1 × compile-time + N ×
+   * instantiate-time.
+   */
+  wasmModule?: WebAssembly.Module
 }
 
 export interface RequestInfo {
