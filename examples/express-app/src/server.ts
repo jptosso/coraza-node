@@ -83,12 +83,16 @@ if (ftw) {
 // GitHub runner kernels (and any host with `net.ipv6.bindv6only=1`)
 // won't route a `127.0.0.1` connect to it, so the FTW health probe
 // hangs on ECONNREFUSED. The explicit IPv4 host removes that surprise.
+process.stderr.write(`[${new Date().toISOString()}] express calling listen()\n`)
 const server = app.listen(port, '0.0.0.0', () => {
   // Write directly + flush — when Node's stdout is a pipe it's line
   // buffered, and `tsx`/pnpm both wrap it again, so the "listening" line
   // sometimes doesn't appear in the CI pipe until SIGTERM. process.stderr
   // is unbuffered, which makes the boot race easy to debug.
-  process.stderr.write(`express listening on 0.0.0.0:${port}\n`)
+  const addr = server.address()
+  process.stderr.write(
+    `[${new Date().toISOString()}] express listen callback fired; address=${JSON.stringify(addr)}\n`,
+  )
 })
 server.on('error', (err: unknown) => {
   process.stderr.write(`express listen error: ${(err as Error).message}\n`)
