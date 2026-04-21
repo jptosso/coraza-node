@@ -247,6 +247,13 @@ sed -E "s/(^[[:space:]]*port:)[[:space:]]*[0-9]+$/\\1 ${PORT}/" \
 # supplied` before a single test executes. Cloud mode disables
 # log-marker checks; that's acceptable because the CRS corpus tests we
 # care about use `status: 403` as their primary assertion.
+# Smoke a request the way go-ftw will: bare TCP, no keep-alive assumptions,
+# HTTP/1.1. Gives us a concrete signal in the log artifact if the adapter
+# serves a simpler curl but rejects go-ftw's raw-TCP style.
+echo "[ftw] Pre-flight: direct HTTP/1.1 smoke on /"
+curl -sS -o - -D - --max-time 5 "http://127.0.0.1:${PORT}/" || true
+echo ""
+
 set +e
 "${FTW_BIN}" run \
   --cloud \
@@ -256,9 +263,13 @@ set +e
   --read-timeout 10s \
   ${DEBUG} \
   "${INCLUDE_FLAG[@]}" \
-  > "${OUT_JSON}"
+  > "${OUT_JSON}" 2> "${BUILD_DIR}/ftw-stderr-${ADAPTER}.log"
 ftw_exit=$?
 set -e
+if [[ "${ftw_exit}" -ne 0 ]]; then
+  echo "[ftw] go-ftw exited with ${ftw_exit}; last 40 stderr lines:" >&2
+  tail -n 40 "${BUILD_DIR}/ftw-stderr-${ADAPTER}.log" >&2 || true
+fi
 
 # --- 7. Parse & enforce threshold ------------------------------------
 if ! [[ -s "${OUT_JSON}" ]]; then
