@@ -1,4 +1,5 @@
 import 'reflect-metadata'
+import os from 'node:os'
 import { NestFactory } from '@nestjs/core'
 import {
   All,
@@ -13,6 +14,7 @@ import {
   Req,
   Res,
 } from '@nestjs/common'
+import { createWAF, createWAFPool } from '@coraza/core'
 import { recommended } from '@coraza/coreruleset'
 import { CorazaModule } from '@coraza/nestjs'
 import { ftwEcho, ftwModeEnabled, handlers } from '@coraza/example-shared'
@@ -29,6 +31,8 @@ const ftw = ftwModeEnabled()
 const port = Number(process.env.PORT ?? 3004)
 const mode = ftw ? 'block' : ((process.env.MODE ?? 'block') as 'detect' | 'block')
 const wafDisabled = process.env.WAF === 'off'
+const usePool = process.env.POOL === '1'
+const poolSize = Number(process.env.POOL_SIZE ?? os.availableParallelism())
 
 @Controller()
 class AppController {
@@ -106,11 +110,18 @@ class FtwController {
 const rules = recommended(ftw ? { paranoia: 2 } : {})
 
 // NestJS's CorazaGuard is a CanActivate — it runs pre-handler only. Response
-// inspection isn't supported on this adapter, so the example tracks that:
-// no `inspectResponse` option exists on CorazaNestOptions, and FTW runs
-// happily against phase 1/2 rules alone.
+// inspection isn't supported on this adapter by design. FTW runs happily
+// against phase 1/2 rules alone.
+// Build the WAF up front so we can honor POOL=1 (required for the FTW
+// path to clear its 180s boot budget under `-gc=precise`).
+const waf = wafDisabled
+  ? null
+  : usePool
+    ? await createWAFPool({ rules, mode, size: poolSize })
+    : await createWAF({ rules, mode })
+
 @Module({
-  imports: wafDisabled ? [] : [CorazaModule.forRoot({ rules, mode })],
+  imports: wafDisabled ? [] : [CorazaModule.forRoot({ waf: waf! })],
   controllers: [ftw ? FtwController : AppController],
 })
 class AppModule {}

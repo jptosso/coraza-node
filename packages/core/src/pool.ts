@@ -330,6 +330,19 @@ function spawnSlot(logger: Logger): WorkerSlot {
     pending.clear()
   })
 
+  // `worker.on('error')` fires on thrown errors but NOT on a clean
+  // `process.exit()` from inside the worker (e.g. an unhandledRejection
+  // branch that aborts). Without this, in-flight callers await forever
+  // and their request/body closures stay live. Reject every pending
+  // promise on exit so callers surface a real failure and let the GC
+  // reclaim the captured buffers.
+  worker.on('exit', (code) => {
+    if (pending.size === 0) return
+    const err = new Error(`coraza: pool worker exited (code ${code})`)
+    for (const p of pending.values()) p.reject(err)
+    pending.clear()
+  })
+
   return slot
 }
 

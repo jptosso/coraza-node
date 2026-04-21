@@ -186,7 +186,7 @@ if [[ "${SKIP_BOOT}" != "1" ]]; then
   # the child under its own group leader; `$!` in the subshell
   # captures the setsid process, which becomes PID == PGID.
   ( cd "${REPO_ROOT}" &&
-    setsid env FTW=1 PORT="${PORT}" pnpm -F "${PKG}" "${DEV_OR_START}" \
+    setsid env FTW=1 POOL=1 POOL_SIZE=4 PORT="${PORT}" pnpm -F "${PKG}" "${DEV_OR_START}" \
       </dev/null \
       > "${BUILD_DIR}/${ADAPTER}.stdout.log" \
       2> "${BUILD_DIR}/${ADAPTER}.stderr.log" &

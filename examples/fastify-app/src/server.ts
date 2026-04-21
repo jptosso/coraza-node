@@ -1,5 +1,6 @@
+import os from 'node:os'
 import Fastify from 'fastify'
-import { createWAF } from '@coraza/core'
+import { createWAF, createWAFPool } from '@coraza/core'
 import { recommended } from '@coraza/coreruleset'
 import { coraza } from '@coraza/fastify'
 import { ftwEcho, ftwModeEnabled, handlers } from '@coraza/example-shared'
@@ -8,6 +9,8 @@ const port = Number(process.env.PORT ?? 3002)
 const ftw = ftwModeEnabled()
 const mode = ftw ? 'block' : ((process.env.MODE ?? 'block') as 'detect' | 'block')
 const wafDisabled = process.env.WAF === 'off'
+const usePool = process.env.POOL === '1'
+const poolSize = Number(process.env.POOL_SIZE ?? os.availableParallelism())
 
 const app = Fastify({ logger: false, bodyLimit: 10 * 1024 * 1024 })
 
@@ -27,7 +30,9 @@ if (ftw) {
 
 if (!wafDisabled) {
   const rules = recommended(ftw ? { paranoia: 2 } : {})
-  const waf = await createWAF({ rules, mode })
+  const waf = usePool
+    ? await createWAFPool({ rules, mode, size: poolSize })
+    : await createWAF({ rules, mode })
   await app.register(coraza, { waf, inspectResponse: ftw })
 }
 
