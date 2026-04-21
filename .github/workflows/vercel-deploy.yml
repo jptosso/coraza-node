@@ -100,12 +100,11 @@ jobs:
       - name: Install Vercel CLI
         run: npm i -g vercel@latest
 
-      # Vercel detects pnpm-lock.yaml by walking up from the project root
-      # and then refuses to find pnpm in its spawn env. The demo's patched
-      # package.json has zero workspace deps left, so npm resolves it fine.
-      # Strip the monorepo lockfile + packageManager hint so Vercel picks
-      # npm cleanly.
-      - name: Force npm on the Vercel build
+      # Strip the monorepo's pnpm config from the patched tree so Vercel's
+      # build infra resolves with npm against the patched package.json
+      # (which has zero workspace: deps left). Keeps the Vercel-side build
+      # self-contained — no pnpm workspace traversal, no corepack.
+      - name: Prepare deploy tree
         run: |
           rm -f pnpm-lock.yaml pnpm-workspace.yaml
           node -e '
@@ -115,28 +114,13 @@ jobs:
             fs.writeFileSync(p, JSON.stringify(j,null,2)+"\n");
           '
 
-      # `vercel pull` fetches the project's prod env + build settings so
-      # `vercel build` produces output that matches the dashboard config.
-      - name: Pull Vercel project settings
-        working-directory: examples/express-app
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
-
-      - name: Build
-        working-directory: examples/express-app
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel build --prod --token=$VERCEL_TOKEN
-
+      # Upload the patched tree to Vercel and let their build infra run
+      # the install + build. Avoids `vercel build`'s local spawn env
+      # which ENOENTs on pnpm/npm in GitHub Actions.
       - name: Deploy
         working-directory: examples/express-app
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
+        run: vercel deploy --prod --yes --token=$VERCEL_TOKEN
