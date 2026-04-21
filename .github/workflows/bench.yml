@@ -1,0 +1,151 @@
+# Reproducible k6 benchmark. Runs the same mixed-traffic workload as
+# `pnpm k6 -- --adapters=<adapter> --duration=20s --vus=50` on a clean
+# runner, so regressions show up without needing someone to boot the
+# reference Ryzen box.
+#
+# Caveat: GitHub-hosted runners are noisier than a dedicated machine.
+# Expect ~±15% run-to-run variance on absolute RPS. The docs numbers
+# (docs/site/index.html#perf, README.md) are measured on a Ryzen 7 7800X3D
+# and stay authoritative unless re-measured on the reference box — this
+# job is a regression alarm, not a replacement.
+#
+# Schedule: weekly (Monday 05:00 UTC) + manual dispatch. On the scheduled
+# run we fail the job if WAF-on RPS regresses by >10% vs. BASELINE_RPS
+# below. On workflow_dispatch we only report — never fail — so it's safe
+# to run ad-hoc after a perf-touching change.
+#
+# Update BASELINE_RPS whenever docs numbers are re-measured on the
+# reference machine.
+
+name: Bench (k6)
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Bench · ${{ matrix.adapter }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Next is intentionally excluded — its middleware runtime doesn't
+        # own the full request/response path so its bench numbers aren't
+        # comparable to the other three.
+        adapter: [express, fastify, nestjs]
+    env:
+      # Measured on the reference machine for createWAFPool size=8, full
+      # CRS, 50-VU mixed traffic, 20s. Keep this in sync with the table
+      # in docs/site/index.html#perf. The job only gates on RPS — p95/p99
+      # are advisory because tail latency is too runner-noisy to alarm on.
+      BASELINE_RPS: '4857'
+      REGRESSION_PCT: '10'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Try the CI build cache first. If the WASM isn't there (cache miss
+      # or first run), rebuild it via the same Docker image CI uses.
+      - name: Cache compiled coraza.wasm
+        id: wasm-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: packages/core/src/wasm/coraza.wasm
+          key: wasm-${{ runner.os }}-${{ hashFiles('wasm/**/*.go', 'wasm/go.mod', 'wasm/go.sum', 'wasm/Dockerfile*', 'wasm/Makefile', 'wasm/version.txt') }}
+          restore-keys: ''
+
+      - name: Build WASM (cache miss)
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: make -C wasm wasm-docker
+
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build example app + deps
+        run: pnpm turbo run build --filter=@coraza/example-${{ matrix.adapter }}...
+
+      # k6 is published as an apt package via Grafana's repo — pinning to
+      # a hashed keyring instead of apt-key (deprecated).
+      - name: Install k6
+        run: |
+          set -euo pipefail
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends k6
+          k6 version
+
+      - name: Run k6 benchmark
+        id: k6
+        run: |
+          set -euo pipefail
+          mkdir -p bench/results
+          pnpm -F @coraza/bench k6 -- \
+            --adapters=${{ matrix.adapter }} \
+            --duration=20s \
+            --vus=50 \
+            | tee bench/results/${{ matrix.adapter }}.log
+          # k6-run.ts writes its JSON summary under /tmp; copy the latest
+          # into the artifact dir so we can upload it.
+          cp $(ls -t /tmp/k6-${{ matrix.adapter }}-*.json | head -1) \
+            bench/results/${{ matrix.adapter }}.json || true
+
+      - name: Upload bench results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-${{ matrix.adapter }}
+          path: bench/results/
+          retention-days: 90
+          if-no-files-found: warn
+
+      # Only the express leg gates against the documented baseline — that's
+      # the config the docs table reports. The other adapters are tracked
+      # as artifacts for trend-watching but don't fail the job on their own.
+      - name: Check for regression (scheduled runs only)
+        if: github.event_name == 'schedule' && matrix.adapter == 'express'
+        run: |
+          set -euo pipefail
+          log=bench/results/${{ matrix.adapter }}.log
+          # renderTable() in bench/k6-run.ts emits rows like:
+          #   RPS              11601.0   4857.1    -58.1%
+          rps=$(awk '/^RPS[[:space:]]/ {print $3}' "$log" | tail -1)
+          if [[ -z "$rps" ]]; then
+            echo "Could not parse RPS from $log — failing for visibility."
+            cat "$log"
+            exit 1
+          fi
+          echo "Measured WAF-on RPS: $rps (baseline: $BASELINE_RPS, regression gate: ${REGRESSION_PCT}%)"
+          awk -v rps="$rps" -v base="$BASELINE_RPS" -v pct="$REGRESSION_PCT" '
+            BEGIN {
+              floor = base * (1 - pct/100)
+              if (rps + 0 < floor) {
+                printf "REGRESSION: %.1f RPS is below %.1f (%.0f%% of %.0f)\n", rps, floor, 100 - pct, base
+                exit 1
+              }
+              printf "OK: %.1f RPS >= %.1f (within %s%% of %s)\n", rps, floor, pct, base
+            }
+          '
