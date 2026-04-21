@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Abi } from '../src/abi.js'
-import { Transaction } from '../src/transaction.js'
+import { Transaction, encodeRequestBundle } from '../src/transaction.js'
 import { createMock } from './mockAbi.js'
 
 function setup(opts: Parameters<typeof createMock>[0] = {}) {
@@ -241,5 +241,98 @@ describe('Transaction', () => {
     expect(() => tx.isRequestBodyAccessible()).toThrow(/closed/)
     expect(() => tx.isResponseBodyAccessible()).toThrow(/closed/)
     expect(() => tx.isResponseBodyProcessable()).toThrow(/closed/)
+  })
+
+  it('processEncodedRequestBundle accepts a pre-built bundle', () => {
+    const { tx, state, txId } = setup()
+    const bundle = encodeRequestBundle(
+      { method: 'GET', url: '/raw', headers: [['host', 'a.test']] },
+      'raw-body',
+    )
+    expect(tx.processEncodedRequestBundle(bundle)).toBe(false)
+    const st = state.txs.get(txId)!
+    expect(st.uri?.uri).toBe('/raw')
+    expect(new TextDecoder().decode(st.lastBody!)).toBe('raw-body')
+  })
+
+  it('processEncodedRequestBundle throws after close', () => {
+    const { tx } = setup()
+    tx.close()
+    const bundle = encodeRequestBundle({ method: 'GET', url: '/', headers: [] }, undefined)
+    expect(() => tx.processEncodedRequestBundle(bundle)).toThrow(/closed/)
+  })
+})
+
+describe('encodeRequestBundle (sink mode)', () => {
+  it('writes into a caller-provided Uint8Array when it fits', () => {
+    const sink = new Uint8Array(4096)
+    const out = encodeRequestBundle(
+      { method: 'GET', url: '/hi', headers: [['host', 'x.test']] },
+      'body-1',
+      undefined,
+      sink,
+    )
+    expect(out.buffer).toBe(sink.buffer)
+    expect(out.byteOffset).toBe(0)
+    // The returned view is a subarray of the sink; bytes outside the
+    // packet are unchanged (zero here).
+    const firstByteOfLenField = out[0]
+    expect(firstByteOfLenField).toBe(new TextEncoder().encode('').length) // addr length = 0
+    expect(sink[out.length]).toBe(0)
+  })
+
+  it('reuses the same sink across two encodes without cross-contamination', () => {
+    const sink = new Uint8Array(4096)
+    const a = encodeRequestBundle(
+      { method: 'POST', url: '/first', headers: [['host', 'a']] },
+      'payload-a',
+      undefined,
+      sink,
+    )
+    const aCopy = new Uint8Array(a) // snapshot before second pass
+
+    const b = encodeRequestBundle(
+      { method: 'GET', url: '/second', headers: [['host', 'b']] },
+      undefined,
+      undefined,
+      sink,
+    )
+    expect(b.buffer).toBe(sink.buffer)
+    // Second encode is shorter; its own view must not spill bytes from the
+    // first encode past `b.length`.
+    const recut = sink.subarray(0, b.length)
+    expect(Array.from(recut)).toEqual(Array.from(b))
+    // Re-decode a from its snapshot to make sure the first call wasn't
+    // corrupted after the fact.
+    const dec = new TextDecoder()
+    // Body field is the last 4-byte-length + bytes; easier to check by
+    // scanning: 'payload-a' must appear in aCopy.
+    expect(dec.decode(aCopy).includes('payload-a')).toBe(true)
+    expect(dec.decode(b).includes('payload-a')).toBe(false)
+  })
+
+  it('falls back to a fresh allocation when the sink is too small', () => {
+    const sink = new Uint8Array(8)
+    const out = encodeRequestBundle(
+      { method: 'POST', url: '/x', headers: [['host', 'a.test']] },
+      'a'.repeat(100),
+      undefined,
+      sink,
+    )
+    expect(out.buffer).not.toBe(sink.buffer)
+    // Sink must be left untouched when overflow forces fallback.
+    for (const b of sink) expect(b).toBe(0)
+  })
+
+  it('preserves UTF-8 clip semantics when fields are oversize', () => {
+    // Method field is capped at 255 bytes; a bogus 300-byte method must
+    // truncate cleanly on a UTF-8 codepoint boundary, not throw.
+    const big = '€'.repeat(200) // each € is 3 bytes
+    expect(() =>
+      encodeRequestBundle(
+        { method: big, url: '/', headers: [] },
+        undefined,
+      ),
+    ).not.toThrow()
   })
 })

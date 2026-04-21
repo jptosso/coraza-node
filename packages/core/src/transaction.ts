@@ -94,6 +94,18 @@ export class Transaction {
   ): boolean {
     this.#ensureOpen()
     const bundle = encodeRequestBundle(req, body, this.#headerBuf)
+    return this.processEncodedRequestBundle(bundle)
+  }
+
+  /**
+   * Lower-level variant of {@link processRequestBundle} that takes an
+   * already-encoded bundle. Used by the pool worker's SAB path, where the
+   * bundle was produced on the main thread and shipped through shared
+   * memory. Consumers outside @coraza/core should stick to
+   * processRequestBundle — the encoding format is internal.
+   */
+  processEncodedRequestBundle(bundle: Uint8Array): boolean {
+    this.#ensureOpen()
     const ptr = this.#writeMalloc(bundle)
     try {
       const rc = this.#abi.exports.tx_process_request_bundle(this.#id, ptr, bundle.length)
@@ -274,11 +286,22 @@ function truncateUtf8(b: Uint8Array, maxBytes: number): Uint8Array {
  * Pack connection+URI+headers+body into the compact binary bundle format
  * that `tx_process_request_bundle` decodes on the WASM side. See wasm/bundle.go
  * for the layout spec — keep these in lockstep.
+ *
+ * When `out` is supplied the encoder writes the bundle into that buffer
+ * in-place and returns a zero-copy subarray view. If the encoded size
+ * exceeds `out.length`, the encoder falls back to allocating a fresh
+ * `Uint8Array` — the caller checks `result.buffer !== out.buffer` to
+ * detect overflow and route through the slower structured-clone path.
+ *
+ * UTF-8 clip semantics are preserved in both modes: oversize fields are
+ * truncated on codepoint boundaries, never thrown. The adapter's
+ * catch→next() fallback must never see a thrown bundle-encode error.
  */
 export function encodeRequestBundle(
   req: RequestInfo,
   body: Uint8Array | string | undefined,
   headerBuf?: { current: Uint8Array },
+  out?: Uint8Array,
 ): Uint8Array {
   // Clip oversize fields rather than throw. Throwing would let the
   // adapter's catch-and-next() fallback turn a crafted-long-method
@@ -306,24 +329,28 @@ export function encodeRequestBundle(
     4 + hdrPkt.length +
     4 + bodyBytes.length
 
-  const out = new Uint8Array(total)
-  const view = new DataView(out.buffer)
+  // If caller passed a reusable sink (SAB view, Node Buffer, or just a
+  // scratch Uint8Array) and it's big enough, write in-place. Otherwise
+  // allocate fresh — callers detect overflow by comparing the returned
+  // view's underlying .buffer to `out.buffer`.
+  const target = out && out.length >= total ? out.subarray(0, total) : new Uint8Array(total)
+  const view = new DataView(target.buffer, target.byteOffset, target.byteLength)
   let o = 0
 
   view.setUint16(o, addr.length, true); o += 2
-  out.set(addr, o); o += addr.length
+  target.set(addr, o); o += addr.length
   view.setUint16(o, cport, true); o += 2
   view.setUint16(o, sport, true); o += 2
-  out[o++] = method.length
-  out.set(method, o); o += method.length
-  out[o++] = proto.length
-  out.set(proto, o); o += proto.length
+  target[o++] = method.length
+  target.set(method, o); o += method.length
+  target[o++] = proto.length
+  target.set(proto, o); o += proto.length
   view.setUint32(o, url.length, true); o += 4
-  out.set(url, o); o += url.length
+  target.set(url, o); o += url.length
   view.setUint32(o, hdrPkt.length, true); o += 4
-  out.set(hdrPkt, o); o += hdrPkt.length
+  target.set(hdrPkt, o); o += hdrPkt.length
   view.setUint32(o, bodyBytes.length, true); o += 4
-  out.set(bodyBytes, o)
+  target.set(bodyBytes, o)
 
-  return out
+  return target
 }
