@@ -1,0 +1,6 @@
+# Mark the shipped WASM binary so git treats it correctly:
+#   * `binary`     — no text diff, no CRLF translation, better delta packing.
+#   * `linguist-generated` — GitHub's UI hides it from language stats and
+#                            collapses it in PR diffs by default.
+packages/core/src/wasm/coraza.wasm binary
+packages/core/src/wasm/coraza.wasm linguist-generated=true
