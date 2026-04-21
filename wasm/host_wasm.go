@@ -25,13 +25,14 @@
 //                 address is stable for the module lifetime.
 //      INVARIANT: under WASI-32 the address always fits in 32 bits.
 //
-// 3. `hostMalloc(size)` — allocates a Go-backed byte slice and leaks its
-//    pointer to the host.
-//      INVARIANT: we pin the backing array in `alive` so the Go GC can't
-//                 reclaim it while the host holds the raw pointer.
-//      INVARIANT: `host_free(ptr)` is eventually called for every non-zero
-//                 return. The TS layer wraps every malloc in a try/finally
-//                 to enforce this.
+// 3. `hostMalloc(size)` — allocates a Go-backed byte slice and hands the
+//    host its raw pointer.
+//      INVARIANT: we pin the backing array in `alivePool` (map keyed on the
+//                 returned pointer) so the Go GC can't reclaim it while the
+//                 host holds the raw int32.
+//      INVARIANT: `host_free(ptr)` deletes the map entry and IS required —
+//                 skipping it leaks linear memory + Go heap forever. The TS
+//                 layer wraps every malloc in a try/finally to enforce this.
 //      DEFENSE : refuses allocations above 64 MiB — a legit host never
 //                 needs that much (Coraza body limit is 1 MiB by default).
 //
@@ -104,14 +105,14 @@ func scratchPtr() int32 {
 func scratchCap() int32 { return int32(len(scratchBacking)) }
 
 // alivePool pins host-allocated slices so TinyGo's GC doesn't reclaim them
-// while their int32 addresses are held by JS. A plain slice is safer than
-// a map keyed on uintptr: TinyGo's conservative GC scans slices reliably,
-// and we never have to hand the runtime a key that might not be there.
+// while their int32 addresses are held by JS. Keyed on the returned WASM
+// pointer so hostFree can actually release the entry.
 //
-// Trade-off: hostFree is a no-op. We accept the leak — input buffers are
-// tiny (header packets <8 KiB, bodies capped by Coraza's body limit). A
-// long-running instance grows slowly and can be recycled by the worker pool.
-var alivePool [][]byte
+// Lifetime invariant: every non-zero hostMalloc return must be paired with
+// exactly one hostFree. The TS layer wraps every malloc in try/finally to
+// enforce this, so unpaired frees are a bug — the leaked entry otherwise
+// pins forever and leaks linear memory + Go heap.
+var alivePool = map[int32][]byte{}
 
 //export host_malloc
 func hostMalloc(size int32) int32 {
@@ -123,12 +124,15 @@ func hostMalloc(size int32) int32 {
 		return 0
 	}
 	p := make([]byte, size)
-	alivePool = append(alivePool, p)
-	return int32(uintptr(unsafe.Pointer(&p[0])))
+	ptr := int32(uintptr(unsafe.Pointer(&p[0])))
+	alivePool[ptr] = p
+	return ptr
 }
 
 //export host_free
 func hostFree(ptr int32) {
-	// No-op. See alivePool comment above.
-	_ = ptr
+	if ptr == 0 {
+		return
+	}
+	delete(alivePool, ptr)
 }

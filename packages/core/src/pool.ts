@@ -31,7 +31,19 @@ import type {
 export interface WAFPoolOptions extends WAFConfig {
   /** Number of worker threads. Default: `os.availableParallelism()`. */
   size?: number
+  /**
+   * Rotate a worker after it has served this many transactions. The WAF
+   * instance is destroyed and a fresh one spawned in its place. Caps the
+   * long-term memory footprint of each worker — Coraza's per-request
+   * allocations aren't all freed (WASM linear memory, Go GC pressure,
+   * scratch buffers), so a process running forever trends up even when
+   * every individual transaction is clean. Default: `50000`. Set `0` or
+   * `Infinity` to disable rotation.
+   */
+  maxRequestsPerWorker?: number
 }
+
+const DEFAULT_MAX_REQUESTS_PER_WORKER = 50_000
 
 interface Pending {
   resolve(value: unknown): void
@@ -43,6 +55,12 @@ interface WorkerSlot {
   pending: Map<number, Pending>
   ready: Promise<void>
   busy: number
+  /** Total transactions ever dispatched to this worker (monotonic). */
+  requests: number
+  /** Rotation latch — flips true once a replacement has been scheduled. */
+  rotating: boolean
+  /** Resolves when this slot is fully drained and terminated. */
+  drained: Promise<void> | null
 }
 
 let nextReqId = 1
@@ -51,33 +69,63 @@ export class WAFPool {
   readonly size: number
   readonly logger: Logger
   readonly mode: NonNullable<WAFConfig['mode']>
+  readonly maxRequestsPerWorker: number
 
   #slots: WorkerSlot[]
   #rr = 0
   #destroyed = false
+  /** Cloneable WAFConfig (stripped of `logger`) for init + rotation spawns. */
+  #workerConfig: WAFConfig
+  /** Draining slots kept alive until in-flight tx's finish. */
+  #draining = new Set<WorkerSlot>()
+  /** Monotonic id for log correlation when a rotation fires. */
+  #rotationId = 0
 
-  private constructor(slots: WorkerSlot[], logger: Logger, mode: NonNullable<WAFConfig['mode']>) {
+  private constructor(
+    slots: WorkerSlot[],
+    logger: Logger,
+    mode: NonNullable<WAFConfig['mode']>,
+    workerConfig: WAFConfig,
+    maxRequestsPerWorker: number,
+  ) {
     this.#slots = slots
     this.size = slots.length
     this.logger = logger
     this.mode = mode
+    this.#workerConfig = workerConfig
+    this.maxRequestsPerWorker = maxRequestsPerWorker
   }
 
   static async create(opts: WAFPoolOptions): Promise<WAFPool> {
-    const { size: requested, ...config } = opts
+    const { size: requested, maxRequestsPerWorker, ...config } = opts
     const size = Math.max(1, requested ?? defaultSize())
     const logger = config.logger ?? consoleLogger
     const mode = config.mode ?? 'detect'
+    const maxReqs =
+      maxRequestsPerWorker === undefined
+        ? DEFAULT_MAX_REQUESTS_PER_WORKER
+        : maxRequestsPerWorker === 0 || !Number.isFinite(maxRequestsPerWorker)
+          ? Infinity
+          : Math.max(1, Math.floor(maxRequestsPerWorker))
+
+    // `logger` carries function references which structured clone (used by
+    // postMessage) can't transfer. Strip it before shipping to the worker —
+    // the worker falls back to its own consoleLogger.
+    const { logger: _strippedForWorker, ...workerConfigCloneable } = config
+    void _strippedForWorker
+    const workerConfig: WAFConfig = workerConfigCloneable
 
     const slots: WorkerSlot[] = []
     for (let i = 0; i < size; i++) slots.push(spawnSlot(logger))
 
     // Init every worker in parallel, reject fast if any fails.
     await Promise.all(
-      slots.map((slot) => slot.ready.then(() => callSlot<void>(slot, { type: 'init', config }))),
+      slots.map((slot) =>
+        slot.ready.then(() => callSlot<void>(slot, { type: 'init', config: workerConfig })),
+      ),
     )
 
-    const pool = new WAFPool(slots, logger, mode)
+    const pool = new WAFPool(slots, logger, mode, workerConfig, maxReqs)
 
     // Pre-warm: send a synthetic request through every worker so V8 JITs
     // the WASM hot paths before real traffic arrives. Cuts first-request
@@ -124,8 +172,19 @@ export class WAFPool {
   async newTransaction(): Promise<WorkerTransaction> {
     if (this.#destroyed) throw new Error('coraza: pool is destroyed')
     const slot = this.#pickSlot()
+    slot.requests++
     const { txId } = await callSlot<{ txId: number }>(slot, { type: 'newTx' })
     slot.busy++
+    // Check the rotation threshold after the successful handoff so a failed
+    // newTx doesn't burn a rotation slot. The tx we just created is pinned
+    // to `slot`; rotating `slot` out of `#slots` won't affect this caller.
+    if (
+      !slot.rotating &&
+      Number.isFinite(this.maxRequestsPerWorker) &&
+      slot.requests >= this.maxRequestsPerWorker
+    ) {
+      this.#scheduleRotation(slot)
+    }
     return new WorkerTransaction(slot, txId)
   }
 
@@ -133,8 +192,11 @@ export class WAFPool {
   async destroy(): Promise<void> {
     if (this.#destroyed) return
     this.#destroyed = true
+    // Include draining slots so in-flight rotations terminate too.
+    const active = [...this.#slots, ...this.#draining]
+    this.#draining.clear()
     await Promise.all(
-      this.#slots.map(async (slot) => {
+      active.map(async (slot) => {
         try {
           await callSlot<void>(slot, { type: 'shutdown' })
         } catch {
@@ -147,6 +209,15 @@ export class WAFPool {
 
   get destroyed(): boolean {
     return this.#destroyed
+  }
+
+  /**
+   * threadIds of the currently-live worker slots (not including draining
+   * ones being rotated out). Exposed for observability — a rotation changes
+   * one of these values, so operators can graph worker churn.
+   */
+  threadIds(): number[] {
+    return this.#slots.map((s) => s.worker.threadId)
   }
 
   // Pick the least-busy slot; fall back to round-robin on ties. This keeps
@@ -162,6 +233,99 @@ export class WAFPool {
     }
     this.#rr++
     return best
+  }
+
+  /**
+   * Spawn a replacement worker in the background and, once it's ready +
+   * initialized, atomically swap it into `#slots` at `old`'s current index.
+   * The old slot is then drained: we wait until every in-flight tx finishes
+   * (busy -> 0 and pending map empty), then shut it down and terminate.
+   *
+   * This must not drop any in-flight request. The `WorkerTransaction`
+   * objects returned before the swap hold a direct reference to `old`, so
+   * their process*() and close() calls still reach the old worker. New
+   * transactions route to the replacement only (we removed `old` from
+   * `#slots`, so `#pickSlot` can't see it).
+   */
+  #scheduleRotation(old: WorkerSlot): void {
+    old.rotating = true
+    const id = ++this.#rotationId
+    const drained = (async () => {
+      const replacement = spawnSlot(this.logger)
+      try {
+        await replacement.ready
+        await callSlot<void>(replacement, { type: 'init', config: this.#workerConfig })
+      } catch (err) {
+        this.logger.error('coraza pool: rotation replacement failed to init; keeping old worker', {
+          rotationId: id,
+          err: (err as Error).message,
+        })
+        old.rotating = false
+        try {
+          await replacement.worker.terminate()
+        } catch {
+          /* ignore */
+        }
+        return
+      }
+
+      // Swap: find `old` in #slots (its index may have shifted if some other
+      // rotation completed first). If it's already gone, we're late — just
+      // terminate the replacement.
+      const idx = this.#slots.indexOf(old)
+      if (idx >= 0 && !this.#destroyed) {
+        this.#slots[idx] = replacement
+        this.#draining.add(old)
+        this.logger.info('coraza pool: rotating worker', {
+          rotationId: id,
+          slot: idx,
+          requests: old.requests,
+          threshold: this.maxRequestsPerWorker,
+        })
+      } else {
+        try {
+          await callSlot<void>(replacement, { type: 'shutdown' })
+        } catch {
+          /* ignore */
+        }
+        await replacement.worker.terminate()
+        return
+      }
+
+      // Drain the old slot: wait for busy==0 and no pending messages.
+      await waitForDrain(old)
+
+      try {
+        await callSlot<void>(old, { type: 'shutdown' })
+      } catch {
+        /* worker may have already exited */
+      }
+      try {
+        await old.worker.terminate()
+      } catch {
+        /* ignore */
+      }
+      this.#draining.delete(old)
+      this.logger.info('coraza pool: rotation complete', { rotationId: id })
+    })()
+    old.drained = drained
+    // Surface unexpected rejections rather than silently swallowing.
+    drained.catch((err) => {
+      this.logger.error('coraza pool: rotation failed', {
+        rotationId: id,
+        err: (err as Error).message,
+      })
+    })
+  }
+}
+
+async function waitForDrain(slot: WorkerSlot): Promise<void> {
+  // Poll in short intervals. The tx's that block us finish via close()
+  // which decrements busy; pending also clears on each reply. 5 ms is
+  // small enough that rotation completes promptly once traffic quiets,
+  // and large enough that a fully-busy pool doesn't burn CPU spinning.
+  while (slot.busy > 0 || slot.pending.size > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
   }
 }
 
@@ -308,6 +472,9 @@ function spawnSlot(logger: Logger): WorkerSlot {
     worker,
     pending,
     busy: 0,
+    requests: 0,
+    rotating: false,
+    drained: null,
     ready: new Promise<void>((resolve, reject) => {
       worker.once('online', () => resolve())
       worker.once('error', (e) => reject(e))

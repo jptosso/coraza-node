@@ -15,6 +15,9 @@ const mode = ftw ? 'block' : ((process.env.MODE ?? 'block') as 'detect' | 'block
 const wafDisabled = process.env.WAF === 'off'
 const usePool = process.env.POOL === '1'
 const poolSize = Number(process.env.POOL_SIZE ?? os.availableParallelism())
+const maxReqsPerWorker = process.env.POOL_MAX_REQS
+  ? Number(process.env.POOL_MAX_REQS)
+  : undefined
 
 const app = express()
 app.use(express.json({ limit: '10mb' }))
@@ -27,7 +30,12 @@ if (ftw) app.use(express.raw({ type: '*/*', limit: '10mb' }))
 if (!wafDisabled) {
   const rules = recommended(ftw ? { paranoia: 2 } : {})
   const waf = usePool
-    ? await createWAFPool({ rules, mode, size: poolSize })
+    ? await createWAFPool({
+        rules,
+        mode,
+        size: poolSize,
+        ...(maxReqsPerWorker !== undefined ? { maxRequestsPerWorker: maxReqsPerWorker } : {}),
+      })
     : await createWAF({ rules, mode })
   app.use(coraza({ waf, inspectResponse: ftw }))
   console.log(
