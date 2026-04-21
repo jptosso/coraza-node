@@ -204,6 +204,7 @@ jobs:
             testing/ftw/build/ftw-result-${{ matrix.adapter }}.json
             testing/ftw/build/ftw-stderr-${{ matrix.adapter }}.log
             testing/ftw/build/ftw-debug-${{ matrix.adapter }}.log
+            testing/ftw/build/ftw-progress-${{ matrix.adapter }}.log
             testing/ftw/build/ftw-config-${{ matrix.adapter }}.yaml
             testing/ftw/build/next-build.log
           retention-days: 7

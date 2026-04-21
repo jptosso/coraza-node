@@ -273,6 +273,25 @@ set +e
   > "${OUT_JSON}" 2> "${BUILD_DIR}/ftw-stderr-${ADAPTER}.log"
 ftw_exit=$?
 set -e
+
+if [[ "${ftw_exit}" -ne 0 ]] && ! [[ -s "${OUT_JSON}" ]]; then
+  # JSON-mode run produces nothing unless every test completes. If it
+  # bailed on a connection-level error we'd have no idea which test.
+  # Re-run in progress mode to capture the last test-id that executed;
+  # that's the one immediately before the hangup.
+  echo "[ftw] JSON run aborted early; re-running with --output normal to locate the failing test"
+  "${FTW_BIN}" run \
+    --cloud \
+    --config "${CONFIG_FILE}" \
+    --dir "${CRS_TESTS_DIR}" \
+    --output normal \
+    --read-timeout 10s \
+    "${INCLUDE_FLAG[@]}" \
+    > "${BUILD_DIR}/ftw-progress-${ADAPTER}.log" 2>&1 \
+    || true
+  echo "[ftw] Last 30 lines of progress log:" >&2
+  tail -n 30 "${BUILD_DIR}/ftw-progress-${ADAPTER}.log" >&2 || true
+fi
 if [[ "${ftw_exit}" -ne 0 ]]; then
   echo "[ftw] go-ftw exited with ${ftw_exit}; last 40 stderr lines:" >&2
   tail -n 40 "${BUILD_DIR}/ftw-stderr-${ADAPTER}.log" >&2 || true
