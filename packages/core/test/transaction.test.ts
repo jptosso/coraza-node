@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Abi } from '../src/abi.js'
-import { Transaction } from '../src/transaction.js'
+import { Transaction, encodeRequestBundle } from '../src/transaction.js'
 import { createMock } from './mockAbi.js'
 
 function setup(opts: Parameters<typeof createMock>[0] = {}) {
@@ -241,5 +241,105 @@ describe('Transaction', () => {
     expect(() => tx.isRequestBodyAccessible()).toThrow(/closed/)
     expect(() => tx.isResponseBodyAccessible()).toThrow(/closed/)
     expect(() => tx.isResponseBodyProcessable()).toThrow(/closed/)
+  })
+})
+
+// Helpers to decode the bundle wire format back for assertions.
+function decodeBundle(out: Uint8Array): {
+  addr: string
+  cport: number
+  sport: number
+  method: string
+  proto: string
+  url: string
+  bodyLen: number
+  method_bytes: Uint8Array
+  url_bytes: Uint8Array
+} {
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength)
+  const dec = new TextDecoder()
+  let o = 0
+  const addrLen = view.getUint16(o, true); o += 2
+  const addr = dec.decode(out.subarray(o, o + addrLen)); o += addrLen
+  const cport = view.getUint16(o, true); o += 2
+  const sport = view.getUint16(o, true); o += 2
+  const methodLen = out[o]!; o += 1
+  const method_bytes = out.subarray(o, o + methodLen)
+  const method = dec.decode(method_bytes); o += methodLen
+  const protoLen = out[o]!; o += 1
+  const proto = dec.decode(out.subarray(o, o + protoLen)); o += protoLen
+  const urlLen = view.getUint32(o, true); o += 4
+  const url_bytes = out.subarray(o, o + urlLen)
+  const url = dec.decode(url_bytes); o += urlLen
+  const hdrLen = view.getUint32(o, true); o += 4 + hdrLen
+  const bodyLen = view.getUint32(o, true)
+  return { addr, cport, sport, method, proto, url, bodyLen, method_bytes, url_bytes }
+}
+
+describe('encodeRequestBundle', () => {
+  it('round-trips a simple request through the scratch-Buffer encoder', () => {
+    const out = encodeRequestBundle(
+      {
+        method: 'GET',
+        url: '/hello',
+        protocol: 'HTTP/2',
+        headers: [['host', 'x']],
+        remoteAddr: '10.0.0.1',
+        remotePort: 1234,
+        serverPort: 80,
+      },
+      undefined,
+    )
+    const d = decodeBundle(out)
+    expect(d).toMatchObject({
+      method: 'GET',
+      proto: 'HTTP/2',
+      url: '/hello',
+      addr: '10.0.0.1',
+      cport: 1234,
+      sport: 80,
+      bodyLen: 0,
+    })
+  })
+
+  it('clips an oversize method at the UTF-8 boundary without throwing', () => {
+    // 300 × 'é' (2 bytes each) = 600 bytes. Clip to 255 lands at a boundary.
+    const giantMethod = 'é'.repeat(300)
+    const out = encodeRequestBundle(
+      { method: giantMethod, url: '/', headers: [] },
+      undefined,
+    )
+    const d = decodeBundle(out)
+    // Length must land on a codepoint boundary; decoding must not produce
+    // U+FFFD. The clipped length is ≤ 255 and even.
+    expect(d.method_bytes.length).toBeLessThanOrEqual(255)
+    expect(d.method_bytes.length % 2).toBe(0)
+    expect(d.method).not.toContain('\ufffd')
+  })
+
+  it('clips an oversize URL at the UTF-8 boundary without throwing when scratch overflows', () => {
+    // 40 KiB of a 3-byte codepoint triples to 120 KiB encoded — exceeds
+    // SCRATCH_CAP (64 KiB), forcing the fresh-Buffer fallback path.
+    const big = '漢'.repeat(40_000)
+    const out = encodeRequestBundle(
+      { method: 'GET', url: big, headers: [] },
+      undefined,
+    )
+    const d = decodeBundle(out)
+    // URL doesn't have a per-field clip, so all bytes survive. The check is
+    // that the fresh-Buffer fallback preserves them exactly.
+    expect(d.url_bytes.length).toBe(big.length * 3)
+    expect(d.url).toBe(big)
+  })
+
+  it('handles default protocol, empty remoteAddr, and a body', () => {
+    const out = encodeRequestBundle(
+      { method: 'POST', url: '/', headers: [] },
+      'payload',
+    )
+    const d = decodeBundle(out)
+    expect(d.proto).toBe('HTTP/1.1')
+    expect(d.addr).toBe('')
+    expect(d.bodyLen).toBe('payload'.length)
   })
 })

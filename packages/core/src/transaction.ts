@@ -257,7 +257,16 @@ export class Transaction {
 
 const bundleEncoder = new TextEncoder()
 
-// Truncate a UTF-8 byte slice at `maxBytes` without splitting a multi-byte
+// Module-scoped scratch for short string encodings inside encodeRequestBundle.
+// `Buffer.allocUnsafe` skips zero-fill; we only ever expose the exact byte
+// ranges we wrote via `subarray`, so the uninitialised tail never leaks into
+// the bundle. 64 KiB comfortably fits method (clipped 255) + proto (clipped
+// 255) + addr (clipped 65535) + a typical URL. If the URL is oversize the
+// encode falls back to a fresh Buffer.
+const SCRATCH_CAP = 65536
+const scratchBuf = Buffer.allocUnsafe(SCRATCH_CAP)
+
+// Truncate a scratch-Buffer slice at `maxBytes` without splitting a multi-byte
 // character. The WAF needs to evaluate *something* even if the field was
 // attacker-inflated; throwing would let the adapter's catch→next() path
 // turn the request into an unintended bypass.
@@ -268,6 +277,19 @@ function truncateUtf8(b: Uint8Array, maxBytes: number): Uint8Array {
   // codepoint; 4 bytes is the UTF-8 max so at most 3 steps.
   while (end > 0 && (b[end]! & 0xc0) === 0x80) end--
   return b.subarray(0, end)
+}
+
+// Encode `s` into a shared scratch Buffer at `offset`, returning the written
+// byte length. Falls back to `bundleEncoder.encode` when the scratch can't
+// hold the worst-case (4 × s.length) output — rare for short fields.
+function writeScratch(s: string, offset: number): { bytes: Uint8Array; len: number } {
+  const worstCase = s.length * 4
+  if (offset + worstCase > SCRATCH_CAP) {
+    const fresh = bundleEncoder.encode(s)
+    return { bytes: fresh, len: fresh.length }
+  }
+  const len = scratchBuf.write(s, offset, 'utf8')
+  return { bytes: scratchBuf.subarray(offset, offset + len), len }
 }
 
 /**
@@ -285,10 +307,27 @@ export function encodeRequestBundle(
   // request into a WAF bypass. Clipping keeps the request evaluated.
   // These limits are an order of magnitude above anything legitimate
   // (method="PROPFIND" = 8 bytes, proto="HTTP/1.1" = 8 bytes).
-  const method = truncateUtf8(bundleEncoder.encode(req.method), 255)
-  const proto = truncateUtf8(bundleEncoder.encode(req.protocol ?? 'HTTP/1.1'), 255)
-  const addr = truncateUtf8(bundleEncoder.encode(req.remoteAddr ?? ''), 65535)
-  const url = bundleEncoder.encode(req.url)
+  //
+  // We lay the four short strings end-to-end in the module scratch Buffer
+  // to skip four TextEncoder allocations per request. Each `writeScratch`
+  // returns a subarray over exactly the bytes it wrote — nothing else
+  // from the uninitialised scratch is ever read or copied out.
+  let off = 0
+  const methodEnc = writeScratch(req.method, off)
+  off += methodEnc.len
+  const method = truncateUtf8(methodEnc.bytes, 255)
+
+  const protoEnc = writeScratch(req.protocol ?? 'HTTP/1.1', off)
+  off += protoEnc.len
+  const proto = truncateUtf8(protoEnc.bytes, 255)
+
+  const addrEnc = writeScratch(req.remoteAddr ?? '', off)
+  off += addrEnc.len
+  const addr = truncateUtf8(addrEnc.bytes, 65535)
+
+  const urlEnc = writeScratch(req.url, off)
+  const url = urlEnc.bytes
+
   const cport = (req.remotePort ?? 0) & 0xffff
   const sport = (req.serverPort ?? 0) & 0xffff
 
@@ -306,8 +345,11 @@ export function encodeRequestBundle(
     4 + hdrPkt.length +
     4 + bodyBytes.length
 
-  const out = new Uint8Array(total)
-  const view = new DataView(out.buffer)
+  // allocUnsafe: every byte of `outBuf[0..total)` is overwritten below before
+  // we `subarray` it out, so the uninitialised backing memory never surfaces.
+  const outBuf = Buffer.allocUnsafe(total)
+  const out = new Uint8Array(outBuf.buffer, outBuf.byteOffset, total)
+  const view = new DataView(outBuf.buffer, outBuf.byteOffset, total)
   let o = 0
 
   view.setUint16(o, addr.length, true); o += 2
