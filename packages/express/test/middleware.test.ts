@@ -117,6 +117,29 @@ describe('@coraza/express', () => {
     expect(res.status).toBe(200)
   })
 
+  it('inspectResponse: true with a pool-like (async close) waf logs a warning and skips hooks', async () => {
+    const { waf } = mockWAF('block', {
+      onResponseBody: () => ({ ruleId: 2, action: 'deny', status: 403, data: 'resp' }),
+    })
+    const warn = vi.fn()
+    // Shim the transaction so isSyncTx() sees an async `close` — the same
+    // check the adapter uses to distinguish a WAFPool's WorkerTransaction
+    // from a sync Transaction.
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      ;(tx as unknown as { close: () => Promise<void> }).close = async () => {}
+      return tx
+    }
+    waf.logger = { ...waf.logger, warn }
+    const app = appWith(coraza({ waf, inspectResponse: true }))
+    const res = await request(app).get('/hi')
+    expect(res.status).toBe(200)
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('inspectResponse=true is a no-op when using WAFPool'),
+    )
+  })
+
   it('fails closed by default when middleware itself throws (onWAFError default)', async () => {
     const { waf } = mockWAF('block')
     const origNew = waf.newTransaction.bind(waf)

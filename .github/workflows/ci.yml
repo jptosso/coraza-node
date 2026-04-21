@@ -82,23 +82,24 @@ jobs:
             echo "Base SHA: $base"
           fi
 
-      - name: Typecheck (affected + dependents)
+      # Always build everything publishable first. Turbo caches each
+      # package's dist/ by input hash, so packages with no changes are
+      # effectively free. This guarantees downstream consumers
+      # (examples/*, adapter tests) see populated dist/ dirs.
+      - name: Build all publishable packages
+        run: pnpm turbo run build --filter=!@coraza/example-*
+
+      - name: Typecheck (affected)
         if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run typecheck --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
-      - name: Build (affected + dependents)
+        run: pnpm turbo run typecheck --filter="...[${{ steps.base.outputs.base }}]" --filter=!@coraza/example-*
+      - name: Unit tests + coverage (affected)
         if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run build --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
-      - name: Unit tests (affected + dependents)
-        if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run test:coverage --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
+        run: pnpm turbo run test:coverage --filter="...[${{ steps.base.outputs.base }}]" --filter=!@coraza/example-*
 
       - name: Typecheck (full)
         if: steps.base.outputs.scope == 'full'
         run: pnpm -r typecheck
-      - name: Build (full)
-        if: steps.base.outputs.scope == 'full'
-        run: pnpm -r build
-      - name: Unit tests (full)
+      - name: Unit tests + coverage (full)
         if: steps.base.outputs.scope == 'full'
         run: pnpm -r test:coverage
 
@@ -151,16 +152,16 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm -r --filter "@coraza/{express,fastify,next,nestjs}" exec playwright install --with-deps chromium
 
-      - name: Build (affected + dependents)
-        if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run build --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
-      - name: E2E (affected + dependents)
-        if: steps.base.outputs.scope == 'affected'
-        run: pnpm turbo run e2e --filter=...[${{ steps.base.outputs.base }}] --filter=!@coraza/example-*
+      # Same pattern as the test job: always build publishable
+      # packages first so dist/ is populated; then the E2E run only
+      # hits adapters whose source (or transitive deps) changed.
+      - name: Build all publishable packages
+        run: pnpm turbo run build --filter=!@coraza/example-*
 
-      - name: Build (full)
-        if: steps.base.outputs.scope == 'full'
-        run: pnpm -r build
+      - name: E2E (affected)
+        if: steps.base.outputs.scope == 'affected'
+        run: pnpm turbo run e2e --filter="...[${{ steps.base.outputs.base }}]" --filter=!@coraza/example-*
+
       - name: E2E (full)
         if: steps.base.outputs.scope == 'full'
         run: pnpm -r e2e
