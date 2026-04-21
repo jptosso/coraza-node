@@ -12,8 +12,22 @@
 //   GET  /img/logo.png    → fake PNG bytes (drives the skip path)
 //   GET  /api/users/:id   → JSON { id }
 //
-// Each adapter-specific server file imports HANDLERS and SAMPLE_PNG from
-// this module. Keep framework-specific code out of here.
+// When the app is started with `FTW=1`, a single additional route
+// is mounted that every adapter implements identically — the go-ftw
+// test runner fires every CRS test case at it:
+//
+//   ALL  /*               → 200 with an echo of method + URL + headers +
+//                           body back. Identical shape across adapters so
+//                           a single overrides YAML applies to all legs.
+//
+// The FTW endpoint deliberately echoes the request body into the
+// response so RESPONSE-* rules fire. Next's middleware doesn't see
+// response bodies — its outbound-only leg gets a lower pass-rate
+// threshold in the workflow (documented in ftw-overrides.yaml).
+//
+// Each adapter-specific server file imports HANDLERS, SAMPLE_PNG, and
+// FTW_* helpers from this module. Keep framework-specific code out of
+// here.
 
 export const SAMPLE_PNG = Buffer.from([
   // 1×1 transparent PNG, enough to satisfy clients expecting image bytes.
@@ -54,6 +68,46 @@ export const handlers = {
   user(id: string): HandlerResult {
     return { body: { id } }
   },
+}
+
+/**
+ * FTW mode is the single toggle every adapter inspects. `FTW=1` in the
+ * environment switches the app into "mount the echo-all route, run CRS
+ * at paranoia 2 in block mode, otherwise behave normally". The variable
+ * name is stable so the GHA matrix can flip it the same way for every
+ * adapter leg.
+ */
+export function ftwModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.FTW === '1'
+}
+
+export interface FtwEchoInput {
+  method: string
+  url: string
+  headers: Record<string, string>
+  body: string
+}
+
+/**
+ * Build the response body the FTW echo-all route returns. Keeping this
+ * in shared-land means every adapter emits byte-identical JSON, so one
+ * overrides YAML is enough for the whole matrix.
+ */
+export function ftwEcho(input: FtwEchoInput): {
+  status: number
+  body: FtwEchoInput
+  contentType: string
+} {
+  return {
+    status: 200,
+    body: {
+      method: input.method,
+      url: input.url,
+      headers: input.headers,
+      body: input.body,
+    },
+    contentType: 'application/json',
+  }
 }
 
 /** Canonical traffic mix used by benchmarks. */

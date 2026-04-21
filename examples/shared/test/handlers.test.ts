@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { handlers, benchScenarios, SAMPLE_PNG } from '../src/index.js'
+import {
+  ftwEcho,
+  ftwModeEnabled,
+  handlers,
+  benchScenarios,
+  SAMPLE_PNG,
+} from '../src/index.js'
 
 describe('example shared handlers', () => {
   it('root returns the adapter name so benchmarks can tell apps apart', () => {
@@ -70,5 +76,31 @@ describe('bench scenarios catalogue', () => {
       expect(['GET', 'POST']).toContain(s.method)
       expect(s.path.startsWith('/')).toBe(true)
     }
+  })
+})
+
+describe('FTW mode helpers', () => {
+  it('ftwModeEnabled is true only when FTW=1, not for any other truthy value', () => {
+    expect(ftwModeEnabled({ FTW: '1' })).toBe(true)
+    expect(ftwModeEnabled({ FTW: '0' })).toBe(false)
+    expect(ftwModeEnabled({ FTW: 'true' })).toBe(false)
+    expect(ftwModeEnabled({})).toBe(false)
+  })
+
+  it('ftwEcho round-trips the request shape the go-ftw corpus expects', () => {
+    const r = ftwEcho({
+      method: 'POST',
+      url: '/attack?q=1',
+      headers: { 'content-type': 'text/xml' },
+      body: '<?xml version="1.0"?><x/>',
+    })
+    expect(r.status).toBe(200)
+    expect(r.contentType).toBe('application/json')
+    expect(r.body).toEqual({
+      method: 'POST',
+      url: '/attack?q=1',
+      headers: { 'content-type': 'text/xml' },
+      body: '<?xml version="1.0"?><x/>',
+    })
   })
 })

@@ -4,6 +4,7 @@ import { recommended } from '@coraza/coreruleset'
 import { coraza } from '@coraza/next'
 
 const wafDisabled = process.env.WAF === 'off'
+const ftw = process.env.FTW === '1'
 
 // Next's bundler rewrites `import.meta.url` inside middleware to a
 // synthetic protocol, so @coraza/core's default URL-based wasm lookup
@@ -18,8 +19,8 @@ const wasmPath = path.resolve(
 const wafPromise = wafDisabled
   ? null
   : createWAF({
-      rules: recommended(),
-      mode: (process.env.MODE ?? 'block') as 'detect' | 'block',
+      rules: recommended(ftw ? { paranoia: 2 } : {}),
+      mode: ftw ? 'block' : ((process.env.MODE ?? 'block') as 'detect' | 'block'),
       wasmSource: wasmPath,
     })
 

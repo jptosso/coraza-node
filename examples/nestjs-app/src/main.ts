@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { NestFactory } from '@nestjs/core'
 import {
+  All,
   Body,
   Controller,
   Get,
@@ -14,9 +15,20 @@ import {
 } from '@nestjs/common'
 import { recommended } from '@coraza/coreruleset'
 import { CorazaModule } from '@coraza/nestjs'
-import { handlers } from '@coraza/example-shared'
+import { ftwEcho, ftwModeEnabled, handlers } from '@coraza/example-shared'
 
-type RawReq = { body?: Buffer; rawBody?: Buffer }
+type RawReq = {
+  body?: Buffer | unknown
+  rawBody?: Buffer
+  method?: string
+  originalUrl?: string
+  headers?: Record<string, string | string[] | undefined>
+}
+
+const ftw = ftwModeEnabled()
+const port = Number(process.env.PORT ?? 3004)
+const mode = ftw ? 'block' : ((process.env.MODE ?? 'block') as 'detect' | 'block')
+const wafDisabled = process.env.WAF === 'off'
 
 @Controller()
 class AppController {
@@ -43,7 +55,8 @@ class AppController {
 
   @Post('/upload')
   upload(@Body() body: unknown, @Req() req: RawReq): unknown {
-    const buf = (req.rawBody as Buffer | undefined) ?? (Buffer.isBuffer(body) ? body : null)
+    const buf =
+      (req.rawBody as Buffer | undefined) ?? (Buffer.isBuffer(body) ? body : null)
     const len = buf ? buf.length : JSON.stringify(body ?? '').length
     return handlers.upload(len).body
   }
@@ -60,16 +73,51 @@ class AppController {
   }
 }
 
-const port = Number(process.env.PORT ?? 3004)
-const mode = (process.env.MODE ?? 'block') as 'detect' | 'block'
-const wafDisabled = process.env.WAF === 'off'
+// In FTW mode we replace the routed controller with a catch-all that
+// echoes the request back. The go-ftw corpus targets URLs the demo
+// controller doesn't define, so a single named-wildcard route keeps
+// every test case on the same handler. (Nest 11 runs on Express 5 /
+// path-to-regexp v8, which rejects a bare `*` — named wildcard is
+// required.)
+@Controller()
+class FtwController {
+  @All('{*any}')
+  echo(@Req() req: RawReq): unknown {
+    const headers: Record<string, string> = {}
+    for (const [k, v] of Object.entries(req.headers ?? {})) {
+      if (typeof v === 'string') headers[k] = v
+      else if (Array.isArray(v)) headers[k] = v.join(',')
+    }
+    const raw = (req.rawBody as Buffer | undefined) ?? req.body
+    const body = Buffer.isBuffer(raw)
+      ? raw.toString('utf8')
+      : typeof raw === 'string'
+        ? raw
+        : JSON.stringify(raw ?? '')
+    return ftwEcho({
+      method: req.method ?? 'GET',
+      url: req.originalUrl ?? '/',
+      headers,
+      body,
+    }).body
+  }
+}
+
+const rules = recommended(ftw ? { paranoia: 2 } : {})
 
 @Module({
-  imports: wafDisabled ? [] : [CorazaModule.forRoot({ rules: recommended(), mode })],
-  controllers: [AppController],
+  imports: wafDisabled
+    ? []
+    : [CorazaModule.forRoot({ rules, mode, inspectResponse: ftw })],
+  controllers: [ftw ? FtwController : AppController],
 })
 class AppModule {}
 
-const app = await NestFactory.create(AppModule, { logger: ['error', 'warn'], rawBody: true })
+const app = await NestFactory.create(AppModule, {
+  logger: ['error', 'warn'],
+  rawBody: true,
+})
 await app.listen(port)
-console.log(`nestjs listening on :${port} (mode=${mode}, waf=${wafDisabled ? 'off' : 'on'})`)
+console.log(
+  `nestjs listening on :${port} (mode=${mode}, waf=${wafDisabled ? 'off' : 'on'}${ftw ? ', FTW=1 paranoia=2' : ''})`,
+)

@@ -346,6 +346,53 @@ write four changesets — one on core is enough.
   `skip-changeset` label exists for docs-only / workflow-only PRs that
   somehow touched `packages/` (rare; usually means the PR is mis-scoped).
 
+## FTW (CRS regression corpus)
+
+We drive the OWASP `coreruleset` `go-ftw` test corpus against every
+adapter, not just Express. The goal is a fast-feedback regression
+signal whenever the WASM engine or the SecLang CRS profile in
+`@coraza/coreruleset` changes — either direction should show up as a
+matrix-leg failure, not a silent bypass.
+
+How the pieces fit:
+
+- Every example app in `examples/` reads `FTW=1` from the env. When
+  set, it mounts a single echo-all route, runs CRS in `block` mode at
+  paranoia 2, and otherwise preserves its normal request/response
+  shape. Shared logic lives in `examples/shared/src/index.ts`
+  (`ftwModeEnabled`, `ftwEcho`).
+- `testing/ftw/run.sh` is the runner. It installs `go-ftw` pinned via
+  `GO_FTW_VERSION` (default `v2.1.1`), fetches the CRS corpus at
+  `CRS_TAG` (read from `wasm/version.txt`), boots the selected
+  adapter under `FTW=1`, runs `go-ftw run` with the shared overrides
+  file, and enforces a pass-rate threshold.
+- `testing/ftw/ftw-overrides.yaml` is shared across adapters. Entries
+  carry tagged justifications — `[next-only]`, `[apache]`,
+  `[node-http]`, `[upstream-coraza]`, `[engine]`, `[fastify-*]` — that
+  distinguish framework-specific caveats (e.g. Next middleware cannot
+  read response bodies, so the outbound RESPONSE-95x rules never fire
+  there) from genuine engine bugs.
+- `.github/workflows/ftw.yml` runs a `strategy.matrix` over
+  `[express, fastify, next, nestjs]` with `fail-fast: false`. Express,
+  Fastify, and NestJS carry a 100% threshold. Next's leg carries a
+  lower threshold (85%) because its middleware runtime cannot inspect
+  response bodies — the delta equals the `[next-only]` override
+  block.
+
+Running locally against a single adapter:
+
+```sh
+pnpm wasm                                      # or download an artifact
+pnpm turbo run build --filter=!@coraza/example-*
+bash testing/ftw/run.sh --adapter express --port 3001
+# or: bash testing/ftw/run.sh fastify 3002 --threshold 98
+```
+
+If you add a rule-family override: include the tag (`[next-only]`,
+`[engine]`, …) and a one-line reason. Overrides without a tag are
+reviewer-rejected — the audit trail in the YAML is how we know whether
+a failure is framework noise or an engine regression.
+
 ## Known issues
 
 1. **Local WASM build with `no_fs_access`**: the TinyGo build tag may not
@@ -365,4 +412,5 @@ write four changesets — one on core is enough.
 | Static-file bypass logic | `packages/core/src/skip.ts` (NOT per-adapter) |
 | CRS profile preset | `packages/coreruleset/src/index.ts` |
 | CI / release workflow | `.github/workflows/*.yml` |
+| FTW corpus / overrides | `testing/ftw/*` + `.github/workflows/ftw.yml` |
 | Docs an agent will read | THIS FILE. Not a new doc. |
