@@ -192,8 +192,10 @@ jobs:
       # re-downloads exactly that version.
       - name: Resolve Playwright version
         id: pw
+        # @playwright/test is a dev-dep of each adapter, not the root,
+        # so resolve it from an adapter's workspace.
         run: |
-          v=$(node -p "require('@playwright/test/package.json').version")
+          v=$(pnpm -F @coraza/express exec node -p "require('@playwright/test/package.json').version")
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browsers
         id: pw-cache
