@@ -11,12 +11,20 @@ export default defineConfig({
       exclude: [
         'src/**/*.d.ts',
         'src/**/types.ts',
+        // Barrel files: pure re-exports, nothing to exercise.
         'src/index.ts',
+        'src/internal.ts',
         // wasm.ts is pure Node/WASI I/O glue (file reading, WebAssembly.instantiate,
         // WASI lifecycle). It's exercised end-to-end by the adapter E2E suites which
         // boot with the real compiled WASM binary. Keeping it out of unit coverage
         // avoids brittle mocks of the WebAssembly + WASI globals.
         'src/wasm.ts',
+        'src/wasmPatch.ts',
+        'src/wasi.ts',
+        // hostRegex.ts forwards WASM rx_* imports to V8's RegExp engine.
+        // It's driven by the live CRS ruleset inside the compiled WASM;
+        // the adapter E2E tests cover its hot path end-to-end.
+        'src/hostRegex.ts',
         // pool.ts + pool-worker.ts are worker_threads glue. Unit-testing
         // Node's worker API reliably requires building the worker script
         // to disk; they're exercised by the pool integration test
