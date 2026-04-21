@@ -155,6 +155,68 @@ describe('@coraza/fastify', () => {
     await app.close()
   })
 
+  it('fails closed (503) when newTransaction itself throws (default)', async () => {
+    const { waf } = mockWAF('block')
+    waf.newTransaction = () => {
+      throw new Error('WAF not ready')
+    }
+    const app = Fastify({ logger: false })
+    await app.register(coraza, { waf })
+    app.get('/', async () => 'ok')
+    const res = await app.inject({ method: 'GET', url: '/' })
+    expect(res.statusCode).toBe(503)
+    await app.close()
+  })
+
+  it('onWAFError: allow skips the block when newTransaction throws', async () => {
+    const { waf } = mockWAF('block')
+    waf.newTransaction = () => {
+      throw new Error('WAF not ready')
+    }
+    const app = Fastify({ logger: false })
+    await app.register(coraza, { waf, onWAFError: 'allow' })
+    app.get('/', async () => 'ok')
+    const res = await app.inject({ method: 'GET', url: '/' })
+    expect(res.statusCode).toBe(200)
+    await app.close()
+  })
+
+  it('fails closed (503) when the bundle call itself throws', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('bundle boom')
+      }
+      return tx
+    }
+    const app = Fastify({ logger: false })
+    await app.register(coraza, { waf })
+    app.get('/', async () => 'ok')
+    const res = await app.inject({ method: 'GET', url: '/' })
+    expect(res.statusCode).toBe(503)
+    await app.close()
+  })
+
+  it('onWAFError: allow passes through when the bundle throws', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('bundle boom')
+      }
+      return tx
+    }
+    const app = Fastify({ logger: false })
+    await app.register(coraza, { waf, onWAFError: 'allow' })
+    app.get('/', async () => 'ok')
+    const res = await app.inject({ method: 'GET', url: '/' })
+    expect(res.statusCode).toBe(200)
+    await app.close()
+  })
+
   it('defaultBlock is a no-op when reply is already sent', () => {
     const reply = {
       sent: true,
