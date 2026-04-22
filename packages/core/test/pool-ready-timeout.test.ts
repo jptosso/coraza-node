@@ -4,7 +4,7 @@
 // pool worker file with ESM syntax but no sibling `"type": "module"`
 // marker. Node then refuses to load it — the worker never emits `online`,
 // `error`, or `exit`, and the old pool bootstrap would await forever.
-// That bug is what filed github.com/jptosso/coraza-node#8.
+// That bug is what filed github.com/coraza-incubator/coraza-node#8.
 //
 // We now cap the init handshake with `readyTimeoutMs` and reject with an
 // actionable error. This test proves the deadline fires and the error

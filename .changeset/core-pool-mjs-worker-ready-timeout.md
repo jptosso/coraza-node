@@ -1,5 +1,5 @@
 ---
-'@coraza/core': minor
+'@coraza/core': patch
 ---
 
 `WAFPool`: ship the worker file as `pool-worker.mjs` so Node unambiguously
@@ -8,7 +8,7 @@ loads it as ESM regardless of what the surrounding bundler does with
 dev mode where the emitted worker was `.js` with ESM `import` statements
 but no sibling `"type":"module"` — Node refused to load it, the worker
 never signalled ready, and `createWAFPool` awaited forever
-(github.com/jptosso/coraza-node#8).
+(github.com/coraza-incubator/coraza-node#8).
 
 Also adds a `readyTimeoutMs` option to `createWAFPool` (default `10000`
 ms): if every worker has not acknowledged the init handshake within the

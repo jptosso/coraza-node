@@ -24,5 +24,5 @@ matrix (Node 22 + 24), SHA-pinned actions, weekly k6 regression
 bench. Known inbound-only adapters: Next and NestJS (framework
 limitations, documented).
 
-See README and https://jptosso.github.io/coraza-node for the full
+See README and https://coraza-incubator.github.io/coraza-node for the full
 guide.

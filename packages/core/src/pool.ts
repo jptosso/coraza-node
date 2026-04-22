@@ -182,7 +182,7 @@ export class WAFPool {
     // no sibling `"type": "module"`), Node fails to load it silently —
     // the worker never emits `online`, `error`, or `exit`, and
     // `slot.ready` hangs forever. Turbopack in Next.js 16 dev mode is the
-    // canonical repro; see github.com/jptosso/coraza-node#8. Convert the
+    // canonical repro; see github.com/coraza-incubator/coraza-node#8. Convert the
     // hang into a loud error that tells the operator what to check.
     try {
       await withTimeout(
@@ -581,7 +581,7 @@ async function withTimeout<T>(
 function spawnSlot(logger: Logger, wasmModule?: WebAssembly.Module): WorkerSlot {
   // `.mjs` so Node treats the worker as ESM regardless of what the
   // surrounding bundler (Turbopack, webpack, etc.) does with package.json
-  // markers. See github.com/jptosso/coraza-node#8.
+  // markers. See github.com/coraza-incubator/coraza-node#8.
   const workerUrl = new URL('./pool-worker.mjs', import.meta.url)
   const worker = new Worker(fileURLToPath(workerUrl), {
     // Don't inherit the parent's loader args (e.g. --import tsx) — the worker

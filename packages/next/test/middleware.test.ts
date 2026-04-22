@@ -226,7 +226,7 @@ describe('@coraza/next', () => {
 // Compose-with-existing-proxy contract. The runner exposes a structured
 // decision so downstream `proxy.ts` code doesn't need to sniff
 // `x-middleware-next` on the response body — that sniff is internal
-// territory, see github.com/jptosso/coraza-node#8.
+// territory, see github.com/coraza-incubator/coraza-node#8.
 describe('@coraza/next createCorazaRunner', () => {
   it('returns { allow: true } on benign requests', async () => {
     const { waf } = mockWAF('block')

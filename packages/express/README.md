@@ -1,6 +1,6 @@
 # @coraza/express
 
-Express middleware for [coraza-node](https://github.com/jptosso/coraza-node).
+Express middleware for [coraza-node](https://github.com/coraza-incubator/coraza-node).
 
 ```ts
 import os from 'node:os'
@@ -27,5 +27,5 @@ errors (override with `onWAFError: 'allow'`).
 > **Experimental.** Independent community project, not an official
 > OWASP / Coraza release.
 
-Docs: <https://jptosso.github.io/coraza-node#api-express>
+Docs: <https://coraza-incubator.github.io/coraza-node#api-express>
 · License: Apache-2.0

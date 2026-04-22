@@ -21,5 +21,5 @@ skip?, inspectResponse? })`) and accept both a built WAF and a
   bench. Known inbound-only adapters: Next and NestJS (framework
   limitations, documented).
 
-  See README and https://jptosso.github.io/coraza-node for the full
+  See README and https://coraza-incubator.github.io/coraza-node for the full
   guide.

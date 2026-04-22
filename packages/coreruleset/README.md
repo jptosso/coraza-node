@@ -18,5 +18,5 @@ const rules = recommended({ paranoia: 1 })
 > **Experimental.** Independent community project, not an official
 > OWASP / Coraza release.
 
-Docs: <https://jptosso.github.io/coraza-node>
+Docs: <https://coraza-incubator.github.io/coraza-node>
 · License: Apache-2.0

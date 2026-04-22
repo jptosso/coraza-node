@@ -1,6 +1,6 @@
 # @coraza/nestjs
 
-NestJS module + guard for [coraza-node](https://github.com/jptosso/coraza-node).
+NestJS module + guard for [coraza-node](https://github.com/coraza-incubator/coraza-node).
 
 ```ts
 // app.module.ts
@@ -31,5 +31,5 @@ middleware limitation.
 > **Experimental.** Independent community project, not an official
 > OWASP / Coraza release.
 
-Docs: <https://jptosso.github.io/coraza-node#api-nestjs>
+Docs: <https://coraza-incubator.github.io/coraza-node#api-nestjs>
 · License: Apache-2.0

@@ -1,5 +1,5 @@
 ---
-'@coraza/next': minor
+'@coraza/next': patch
 ---
 
 Add `createCorazaRunner` — a factory returning a WAF evaluator with a

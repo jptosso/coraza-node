@@ -4,10 +4,10 @@
   "description": "OWASP CoreRuleSet config presets for @coraza/core. CRS rules ship inside the core WASM; this package selects which ones to enable.",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",
-  "homepage": "https://github.com/jptosso/coraza-node",
+  "homepage": "https://github.com/coraza-incubator/coraza-node",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jptosso/coraza-node.git",
+    "url": "https://github.com/coraza-incubator/coraza-node.git",
     "directory": "packages/coreruleset"
   },
   "keywords": [

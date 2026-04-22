@@ -7,7 +7,7 @@ they represent a concrete risk.
 ## How to report
 
 **Use the GitHub Security Advisories tab.** Open a private advisory at
-<https://github.com/jptosso/coraza-node/security/advisories/new>. That's
+<https://github.com/coraza-incubator/coraza-node/security/advisories/new>. That's
 the only supported channel. Please do not:
 
 - Open a public issue for a vulnerability before an advisory is resolved.
@@ -82,7 +82,7 @@ In scope:
 Out of scope:
 
 - Example apps run in dev / detect mode on a laptop.
-- Docs site (<https://jptosso.github.io/coraza-node>).
+- Docs site (<https://coraza-incubator.github.io/coraza-node>).
 - The benchmark harnesses under `bench/`.
 - Dependencies' own advisories — see upstream.
 

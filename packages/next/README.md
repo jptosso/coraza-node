@@ -1,6 +1,6 @@
 # @coraza/next
 
-Next.js middleware adapter for [coraza-node](https://github.com/jptosso/coraza-node).
+Next.js middleware adapter for [coraza-node](https://github.com/coraza-incubator/coraza-node).
 Node runtime only — the Edge runtime lacks WASI.
 
 ## Quick start
@@ -102,5 +102,5 @@ Express or Fastify in front of Next and run coraza-node there.
 > **Experimental.** Independent community project, not an official
 > OWASP / Coraza release.
 
-Docs: <https://jptosso.github.io/coraza-node#api-next>
+Docs: <https://coraza-incubator.github.io/coraza-node#api-next>
 · License: Apache-2.0

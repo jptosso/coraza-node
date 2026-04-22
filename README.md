@@ -13,7 +13,7 @@ to WebAssembly via TinyGo and embedded inside each framework adapter. The
 [OWASP CoreRuleSet](https://github.com/coreruleset/coreruleset) is baked into
 the WASM via [`coraza-coreruleset`](https://github.com/corazawaf/coraza-coreruleset).
 
-- Docs site: **[jptosso.github.io/coraza-node](https://jptosso.github.io/coraza-node)**
+- Docs site: **[coraza-incubator.github.io/coraza-node](https://coraza-incubator.github.io/coraza-node)**
 - Live Express demo on Vercel: **[coraza-node-express-app.vercel.app](https://coraza-node-express-app.vercel.app/)**
   (try `?q=%27+OR+1%3D1--` to see CRS block a SQLi payload)
 
@@ -59,7 +59,7 @@ lambdas, CLIs). For long-running HTTP servers, always use
 
 Full guide — tuning, custom block responses, fail-open/closed, detect-only
 mode, per-adapter options — lives on the docs site:
-**[jptosso.github.io/coraza-node](https://jptosso.github.io/coraza-node)**.
+**[coraza-incubator.github.io/coraza-node](https://coraza-incubator.github.io/coraza-node)**.
 
 ## Development
 
@@ -74,7 +74,7 @@ pnpm e2e           # end-to-end tests per adapter
 
 ~4,857 RPS under full CRS at POOL=8, 100% attack block rate, p99 ~37 ms
 under 50-VU mixed traffic. Detail + tuning knobs:
-**[jptosso.github.io/coraza-node#perf](https://jptosso.github.io/coraza-node#perf)**.
+**[coraza-incubator.github.io/coraza-node#perf](https://coraza-incubator.github.io/coraza-node#perf)**.
 
 ## Adapter caveat — Next.js
 

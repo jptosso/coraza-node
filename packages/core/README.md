@@ -1,6 +1,6 @@
 # @coraza/core
 
-Core WAF engine for [coraza-node](https://github.com/jptosso/coraza-node).
+Core WAF engine for [coraza-node](https://github.com/coraza-incubator/coraza-node).
 Loads the compiled OWASP Coraza WASM binary and exposes the
 `WAF` / `WAFPool` / `Transaction` primitives that every framework adapter
 builds on. Framework-agnostic — use one of the adapters
@@ -22,5 +22,5 @@ const waf = await createWAFPool({
 > **Experimental.** Independent community project, not an official
 > OWASP / Coraza release. API may change before 1.0.
 
-Docs: <https://jptosso.github.io/coraza-node>
+Docs: <https://coraza-incubator.github.io/coraza-node>
 · License: Apache-2.0

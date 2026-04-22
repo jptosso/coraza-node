@@ -1,4 +1,4 @@
-module github.com/jptosso/coraza-node/wasm
+module github.com/coraza-incubator/coraza-node/wasm
 
 go 1.26.0
 

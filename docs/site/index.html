@@ -30,7 +30,7 @@
       <a href="#quickstart" class="topnav-link">Docs</a>
       <a href="#api-core" class="topnav-link">API</a>
       <a href="#recipes" class="topnav-link">Recipes</a>
-      <a href="https://github.com/jptosso/coraza-node" class="topnav-link" rel="noopener">GitHub ↗</a>
+      <a href="https://github.com/coraza-incubator/coraza-node" class="topnav-link" rel="noopener">GitHub ↗</a>
     </nav>
 
     <div class="topbar-actions">
@@ -595,7 +595,7 @@ app.<span class="c-f">register</span>(<span class="c-k">async</span> (api) =&gt;
           <br><br>
           If you need response-body inspection, put Express or Fastify
           in front and run coraza-node there. Documented in
-          <a href="https://github.com/jptosso/coraza-node/blob/main/testing/ftw/ftw-overrides-next.yaml">ftw-overrides-next.yaml</a>
+          <a href="https://github.com/coraza-incubator/coraza-node/blob/main/testing/ftw/ftw-overrides-next.yaml">ftw-overrides-next.yaml</a>
           as the <code>[next-only]</code> go-ftw skips.
         </div>
       </div>
@@ -766,7 +766,7 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFErr
         <div class="callout-badge">Known caveats</div>
         <div>
           Full threat model + caveats (ReDoS via V8 Irregexp, Unicode case-insensitive, UTF-8 encoding, rxprefilter accuracy) are in
-          <a href="https://github.com/jptosso/coraza-node/blob/main/docs/threat-model.md">docs/threat-model.md</a>.
+          <a href="https://github.com/coraza-incubator/coraza-node/blob/main/docs/threat-model.md">docs/threat-model.md</a>.
           Escape hatch: <code>CORAZA_HOST_RX=off</code> forces every <code>@rx</code> pattern through Go's linear-time regex
           instead of V8's backtracking engine.
         </div>
@@ -843,7 +843,7 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFErr
         </div>
         <div class="foot-links">
           <a href="#overview">Top ↑</a>
-          <a href="https://github.com/jptosso/coraza-node" rel="noopener">GitHub</a>
+          <a href="https://github.com/coraza-incubator/coraza-node" rel="noopener">GitHub</a>
           <a href="https://coreruleset.org" rel="noopener">CRS</a>
         </div>
       </div>

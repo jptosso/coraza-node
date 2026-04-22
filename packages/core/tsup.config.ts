@@ -24,7 +24,7 @@ export default defineConfig({
     // it as ES module regardless of any bundler's `package.json` emission
     // choices. Turbopack in Next.js 16 dev mode is the canonical case where
     // `.js` would be re-emitted without a `"type":"module"` marker and fail
-    // to load. See github.com/jptosso/coraza-node#8. `pool.ts` references
+    // to load. See github.com/coraza-incubator/coraza-node#8. `pool.ts` references
     // `./pool-worker.mjs` at runtime; keeping the rename in lock-step with
     // that call site is what ships this fix.
     const renames: Array<[string, string]> = [
