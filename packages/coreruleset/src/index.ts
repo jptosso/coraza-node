@@ -95,7 +95,7 @@ export interface CrsOptions {
 
 const DEFAULT_EXCLUDE: LanguageTag[] = ['php', 'java', 'dotnet']
 
-// CRS 4.10.0 rule files shipped by `coraza-coreruleset` under @owasp_crs.
+// CRS 4.25.0 rule files shipped by `coraza-coreruleset` under @owasp_crs.
 // Order matters: CRS evaluates phase 1 → 2 → 3 → 4 → 5, and the rules rely
 // on initialization + common exceptions firing first. We emit in CRS's
 // documented numeric order.
@@ -128,7 +128,7 @@ const CRS_FILES = [
 ] as const
 
 // Per-language file map. Entries only exist for languages that actually have
-// a dedicated per-language file in CRS 4.10.0. `nodejs`/`dotnet` don't — they
+// a dedicated per-language file in CRS 4.25.0. `nodejs`/`dotnet` don't — they
 // live inside the GENERIC pack — so excluding them is a no-op at file level.
 const REQUEST_LANG_FILES: Partial<Record<LanguageTag, string>> = {
   php: 'REQUEST-933-APPLICATION-ATTACK-PHP.conf',

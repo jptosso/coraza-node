@@ -33,6 +33,14 @@
 #                  sees it. No bypass — the request never reaches the app.
 #       [upstream-coraza]  also fails against corazawaf/coraza-caddy with
 #                  the same error. Tracked in the upstream coraza repo.
+#       [upstream-crs]  the CRS corpus itself documents the case as
+#                  "doesn't work with HTTP/1.1"; the test body in CRS has
+#                  a comment acknowledging it is aspirational and only
+#                  passes under HTTP/2. Not a bypass — the rule would
+#                  correctly fire if HTTP/2 data-frame length were
+#                  available, but under HTTP/1.1 the request either
+#                  carries a body with a present (empty-value)
+#                  Content-Type header, or is parsed as body-less.
 #       [next-only] Next.js middleware cannot read response bodies, so
 #                  outbound RESPONSE-95x rules can't fire on that matrix
 #                  leg. Other legs still enforce the rule.
@@ -70,6 +78,22 @@ testoverride:
     "921250-1": "[upstream-coraza] $Version cookie match not yet implemented upstream"
     "921250-2": "[upstream-coraza] $Version cookie match not yet implemented upstream"
     "933120-2": "[upstream-coraza] match_regex is ModSec-specific; not supported"
+
+    # ---- [upstream-crs] corpus cases CRS itself flags as HTTP/2-only ----
+    # Rule 920640 (new in CRS 4.24.0) fires on "body present + no
+    # Content-Type". Under HTTP/1.1 the CRS tests for the "should NOT
+    # fire" branch cannot be faithfully expressed: the empty-value
+    # Content-Type header (test 4) still counts as present per RFC 7230,
+    # and a request without Content-Length (test 5) may still deliver
+    # bytes that Coraza's forced body processor (CRS rule 901340 sets
+    # ctl:forceRequestBodyVariable=On) turns into a non-zero
+    # REQUEST_BODY_LENGTH. The CRS test YAML itself (see
+    # tests/REQUEST-920-PROTOCOL-ENFORCEMENT/920640.yaml, test_id 4 & 5
+    # desc:) says "This test will primarily work when HTTP/2.0 support
+    # is available in go-ftw". Verified same behavior on Coraza 3.3.3
+    # and 3.7.0 — not an engine regression. See report in this PR.
+    "920640-4": "[upstream-crs] CRS 4.24 920640: HTTP/1.1-specific, corpus flagged as HTTP/2-only"
+    "920640-5": "[upstream-crs] CRS 4.24 920640: HTTP/1.1-specific, corpus flagged as HTTP/2-only"
 
     # ---- [node-http] header normalization edge cases -------------------
     "920160-4": "[node-http] Non-numeric Content-Length: Node auto-corrects before WAF"

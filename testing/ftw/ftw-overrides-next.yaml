@@ -47,6 +47,13 @@ testoverride:
     "921250-2": "[upstream-coraza] $Version cookie match not yet implemented upstream"
     "933120-2": "[upstream-coraza] match_regex is ModSec-specific; not supported"
 
+    # ---- [upstream-crs] (shared) ---------------------------------------
+    # See ftw-overrides.yaml for the full justification. CRS 4.24 rule
+    # 920640 has two test cases the CRS corpus itself flags as
+    # HTTP/2-only; they can't be faithfully exercised under HTTP/1.1.
+    "920640-4": "[upstream-crs] CRS 4.24 920640: HTTP/1.1-specific, corpus flagged as HTTP/2-only"
+    "920640-5": "[upstream-crs] CRS 4.24 920640: HTTP/1.1-specific, corpus flagged as HTTP/2-only"
+
     # ---- [node-http] (shared) ------------------------------------------
     "920160-4": "[node-http] Non-numeric Content-Length: Node auto-corrects before WAF"
     "920181-1": "[node-http] Content-Length+Transfer-Encoding: Node rejects before WAF"
