@@ -1,2 +1,2 @@
-coraza=3.3.3
-coreruleset=4.10.0
+coraza=3.7.0
+coreruleset=4.25.0
