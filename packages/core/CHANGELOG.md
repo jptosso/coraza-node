@@ -1,5 +1,17 @@
 # @coraza/core
 
+## 0.1.0-preview.2
+
+### Patch Changes
+
+- 43602af: Default WASM loader now falls back through `createRequire` when the host
+  bundler rewrites `import.meta.url` to an empty or sentinel value. Fixes
+  `createWAF()` / `createWAFPool()` throwing `unsupported URL protocol:` at
+  boot under Next.js 15's middleware bundler. The same fallback applies to
+  the pool's `pool-worker.mjs` resolution. Behaviour is unchanged on
+  runtimes that expose a usable `import.meta.url` (every non-bundled Node
+  process, Next 16's `proxy.ts` pipeline, plain workers).
+
 ## 0.1.0-preview.1
 
 ### Patch Changes

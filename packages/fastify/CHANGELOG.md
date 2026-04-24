@@ -1,5 +1,12 @@
 # @coraza/fastify
 
+## 0.1.0-preview.2
+
+### Patch Changes
+
+- Updated dependencies [43602af]
+  - @coraza/core@0.1.0-preview.2
+
 ## 0.1.0-preview.1
 
 ### Patch Changes

@@ -22,10 +22,12 @@
     "fastify-pool-response-phase",
     "initial-preview",
     "next-16-peer",
+    "next-bundler-docs",
     "next-compose-runner",
     "next-readme-next16",
     "org-transfer",
     "rxmatch-fastpath",
-    "upstream-bump-20260422"
+    "upstream-bump-20260422",
+    "wasm-loader-bundler-fallback"
   ]
 }
