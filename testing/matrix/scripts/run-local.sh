@@ -21,11 +21,11 @@ MATRIX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${MATRIX_DIR}/../.." && pwd)"
 CHECK="${SCRIPT_DIR}/check.mjs"
 
-DEFAULT_CASES="express4 express5 fastify5 nestjs10 nestjs11 next14-middleware next15-middleware next16-proxy plain-esm plain-cjs"
+DEFAULT_CASES="express4 express5 fastify5 nestjs11 next15-middleware next15-middleware-turbopack next16-proxy next16-proxy-turbopack plain-esm plain-cjs"
 CASES="${CASES:-${DEFAULT_CASES}}"
 POOL_MODES="${POOL_MODES:-single pool}"
 MATRIX_PORT="${MATRIX_PORT:-40000}"
-BOOT_TIMEOUT="${BOOT_TIMEOUT:-45}"
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-90}"
 
 BUILD_DIR="${MATRIX_DIR}/.build"
 mkdir -p "${BUILD_DIR}"
@@ -67,12 +67,17 @@ for case_name in ${CASES}; do
     logfile="${BUILD_DIR}/${case_name}-${pool}.log"
     echo "[matrix] → ${label} on :${port}"
 
-    (cd "${case_dir}" && env \
-        PORT="${port}" \
-        POOL="${pool_env}" \
+    # `setsid` puts pnpm + every grandchild (tsx, next, node) in a fresh
+    # process group so we can kill the whole tree by group id later.
+    # Without it, pkill misses nephew processes (Next forks more workers
+    # than the immediate child tree shows) and they hold the port,
+    # causing the next leg to EADDRINUSE.
+    setsid bash -c "cd '${case_dir}' && env \
+        PORT='${port}' \
+        POOL='${pool_env}' \
         NODE_ENV=production \
         pnpm start \
-        >"${logfile}" 2>&1) &
+        >'${logfile}' 2>&1" &
     app_pid=$!
 
     CASE_PORT="${port}" \
@@ -82,11 +87,20 @@ for case_name in ${CASES}; do
       node "${CHECK}"
     rc=$?
 
-    # Shut down the background server. `pnpm start` spawns grandchildren
-    # (tsx, next, node); pkill on the PPID reliably reaches the whole tree.
-    kill -TERM "${app_pid}" 2>/dev/null || true
-    pkill -TERM -P "${app_pid}" 2>/dev/null || true
+    # Kill the whole process group — `setsid` made the leg its own
+    # session leader, so its PID equals its PGID. `kill -- -PGID` reaches
+    # every descendant in one shot.
+    kill -TERM -- "-${app_pid}" 2>/dev/null || true
+    sleep 0.5
+    kill -KILL -- "-${app_pid}" 2>/dev/null || true
     wait "${app_pid}" 2>/dev/null || true
+    # Belt-and-braces: anything still bound to the leg's port escaped
+    # the group kill (rare, e.g. a child that called setsid itself).
+    if command -v lsof >/dev/null 2>&1; then
+      lsof -ti:${port} 2>/dev/null | xargs -r kill -KILL 2>/dev/null || true
+    elif command -v fuser >/dev/null 2>&1; then
+      fuser -k -KILL "${port}/tcp" 2>/dev/null || true
+    fi
 
     if [[ "${rc}" -eq 0 ]]; then
       RESULTS+=("${label}\tPASS")

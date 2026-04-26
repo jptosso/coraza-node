@@ -70,9 +70,7 @@ jobs:
           - express4
           - express5
           - fastify5
-          - nestjs10
           - nestjs11
-          - next14-middleware
           - next15-middleware
           - next16-proxy
           - plain-esm

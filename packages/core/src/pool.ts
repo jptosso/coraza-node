@@ -585,7 +585,17 @@ function spawnSlot(logger: Logger, wasmModule?: WebAssembly.Module): WorkerSlot 
   // defaultWasmPath so Next.js 15's middleware bundler (which rewrites
   // import.meta.url) doesn't explode on pool boot.
   const workerUrl = defaultPoolWorkerPath()
-  const worker = new Worker(fileURLToPath(workerUrl), {
+  // fileURLToPath() throws ERR_INVALID_ARG_TYPE when the URL is an
+  // instance of a bundler-duplicated URL class (webpack under Next 15
+  // middleware). Fall back to manual pathname decode — works across
+  // every bundler because it touches no classes.
+  let workerPath: string
+  try {
+    workerPath = fileURLToPath(workerUrl)
+  } catch {
+    workerPath = decodeURIComponent(workerUrl.pathname)
+  }
+  const worker = new Worker(workerPath, {
     // Don't inherit the parent's loader args (e.g. --import tsx) — the worker
     // runs the pre-compiled pool-worker.mjs and doesn't need the TS loader.
     execArgv: [],

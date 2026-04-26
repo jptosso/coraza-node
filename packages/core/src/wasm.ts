@@ -18,11 +18,34 @@ const CORAZA_INITIAL_PAGES = 2100
 
 export type WasmSource = ArrayBufferLike | Uint8Array | URL | string
 
+// Webpack (and Turbopack, when middleware code is edge-compiled with the
+// node runtime) can embed a second copy of `node:url`, so the URL we
+// constructed in wasmResolve.ts is an instance of a DIFFERENT URL class
+// than the one Node's `fileURLToPath` / `instanceof URL` check against.
+// Duck-type on `protocol`/`pathname` and fall back to manual file-URL
+// decoding when fileURLToPath rejects. See coraza-incubator/coraza-node#16.
+function isUrlLike(x: unknown): x is URL {
+  return (
+    typeof x === 'object' &&
+    x !== null &&
+    typeof (x as { protocol?: unknown }).protocol === 'string' &&
+    typeof (x as { pathname?: unknown }).pathname === 'string'
+  )
+}
+
+function urlToFsPath(u: URL): string {
+  try {
+    return fileURLToPath(u)
+  } catch {
+    return decodeURIComponent(u.pathname)
+  }
+}
+
 async function resolveBytes(src: WasmSource): Promise<Uint8Array> {
   if (src instanceof Uint8Array) return src
   if (src instanceof ArrayBuffer) return new Uint8Array(src)
-  if (src instanceof URL) {
-    if (src.protocol === 'file:') return readFile(fileURLToPath(src))
+  if (isUrlLike(src)) {
+    if (src.protocol === 'file:') return readFile(urlToFsPath(src))
     throw new Error(`unsupported URL protocol: ${src.protocol}`)
   }
   // string — treat as filesystem path.
