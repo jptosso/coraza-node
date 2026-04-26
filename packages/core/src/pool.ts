@@ -629,7 +629,8 @@ function spawnSlot(logger: Logger, wasmModule?: WebAssembly.Module): WorkerSlot 
   })
 
   worker.on('error', (err) => {
-    for (const p of pending.values()) p.reject(err)
+    const e = err instanceof Error ? err : new Error(String(err))
+    for (const p of pending.values()) p.reject(e)
     pending.clear()
   })
 
