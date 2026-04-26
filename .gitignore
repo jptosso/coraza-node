@@ -42,3 +42,9 @@ wasm/wasm
 # FTW runner scratch (corpus clone + per-run build artifacts + logs)
 testing/ftw/.coreruleset/
 testing/ftw/build/
+
+# Matrix runner scratch (per-leg server logs)
+testing/matrix/.build/
+# Next build artifacts inside matrix cases
+testing/matrix/cases/*/.next/
+testing/matrix/cases/*/next-env.d.ts

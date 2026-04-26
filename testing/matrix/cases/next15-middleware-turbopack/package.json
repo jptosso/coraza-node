@@ -1,0 +1,21 @@
+{
+  "name": "@coraza/matrix-next15-middleware-turbopack",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "next dev --turbo -p ${PORT:-3000}"
+  },
+  "dependencies": {
+    "@coraza/core": "workspace:*",
+    "@coraza/coreruleset": "workspace:*",
+    "@coraza/next": "workspace:*",
+    "next": "15.5.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/node": "^22.7.5",
+    "typescript": "^5.6.2"
+  }
+}

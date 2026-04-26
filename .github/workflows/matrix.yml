@@ -1,0 +1,231 @@
+name: Compatibility Matrix
+
+# Boot each case (framework × runtime × module-format × pool) and verify
+# the three compatibility assertions:
+#
+#   /healthz      → 200
+#   /search?q=<SQLi>  → 403
+#   POST /echo { msg: <XSS> } → 403
+#
+# The framework matrix is 10 cases × 2 Node versions × 2 pool modes = 40
+# legs. Turbopack legs are a smaller, Node-22-only block (2 cases × 2
+# pool modes = 4 legs) because `next dev --turbo` is a long-running dev
+# server and cannot be parallelised as tightly as the production-build
+# cases.
+
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * 1' # Mondays 08:00 UTC
+
+concurrency:
+  group: matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-wasm:
+    name: Build WASM (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Same cache key as ci.yml so matrix legs share the WASM artifact
+      # with the regular CI pipeline.
+      - name: Cache compiled coraza.wasm
+        id: wasm-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: packages/core/src/wasm/coraza.wasm
+          key: wasm-${{ runner.os }}-${{ hashFiles('wasm/**/*.go', 'wasm/go.mod', 'wasm/go.sum', 'wasm/Dockerfile*', 'wasm/Makefile', 'wasm/version.txt') }}
+          restore-keys: ''
+
+      - name: Build with reproducible Docker image
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: make -C wasm wasm-docker
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coraza-wasm
+          path: packages/core/src/wasm/coraza.wasm
+          retention-days: 7
+
+  matrix:
+    name: ${{ matrix.case }} · node-${{ matrix.node }} · ${{ matrix.pool }}
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - express4
+          - express5
+          - fastify5
+          - nestjs11
+          - next15-middleware
+          - next16-proxy
+          - plain-esm
+          - plain-cjs
+        node: ['22', '24']
+        pool: ['single', 'pool']
+    env:
+      CASE: ${{ matrix.case }}
+      POOL: ${{ matrix.pool == 'pool' && '1' || '' }}
+      LEG_PORT: '41000'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coraza-wasm
+          path: packages/core/src/wasm
+      - uses: pnpm/action-setup@903f9c1a6ebcba6cf41d87230be49611ac97822e # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      # The adapter + core need a fresh build so `workspace:*` resolves
+      # dist output in the case directories.
+      - name: Build core + adapters
+        run: pnpm turbo run build --filter='./packages/*'
+
+      # next-built cases need `next build` up front; the rest launch
+      # directly via tsx or node.
+      - name: Build Next case (if applicable)
+        if: startsWith(matrix.case, 'next')
+        run: pnpm -F @coraza/matrix-${{ matrix.case }} build
+
+      - name: Boot case and run driver
+        env:
+          CASE_HOST: 127.0.0.1
+        run: |
+          set -uo pipefail
+          PORT="${LEG_PORT}"
+          LOG="$RUNNER_TEMP/${CASE}-${{ matrix.node }}-${{ matrix.pool }}.log"
+          PORT="$PORT" POOL="$POOL" NODE_ENV=production \
+            pnpm -F "@coraza/matrix-${CASE}" start \
+            > "$LOG" 2>&1 &
+          APP_PID=$!
+          echo "APP_PID=$APP_PID" >> "$GITHUB_ENV"
+          echo "LOG=$LOG" >> "$GITHUB_ENV"
+
+          set +e
+          CASE_PORT="$PORT" CASE_NAME="${CASE}" BOOT_TIMEOUT=60 \
+            node testing/matrix/scripts/check.mjs
+          rc=$?
+          set -e
+
+          # Shut down the server tree (pnpm + tsx + node grandchild).
+          kill -TERM "$APP_PID" 2>/dev/null || true
+          pkill -TERM -P "$APP_PID" 2>/dev/null || true
+          wait "$APP_PID" 2>/dev/null || true
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::${CASE} server log"
+            tail -n 200 "$LOG" || true
+            echo "::endgroup::"
+            exit "$rc"
+          fi
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: matrix-log-${{ matrix.case }}-node${{ matrix.node }}-${{ matrix.pool }}
+          path: ${{ env.LOG }}
+          retention-days: 14
+
+  # Turbopack legs boot `next dev --turbo`, which is a long-running dev
+  # server. We keep them on Node 22 only (Node 24 would double the runtime
+  # with no additional signal — Turbopack's Node compatibility matrix is
+  # tighter than webpack's and Node 22 is what the Next docs validate
+  # against).
+  matrix-turbopack:
+    name: ${{ matrix.case }} · turbopack · ${{ matrix.pool }}
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - next15-middleware-turbopack
+          - next16-proxy-turbopack
+        pool: ['single', 'pool']
+    env:
+      CASE: ${{ matrix.case }}
+      POOL: ${{ matrix.pool == 'pool' && '1' || '' }}
+      LEG_PORT: '42000'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coraza-wasm
+          path: packages/core/src/wasm
+      - uses: pnpm/action-setup@903f9c1a6ebcba6cf41d87230be49611ac97822e # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build core + adapters
+        run: pnpm turbo run build --filter='./packages/*'
+
+      - name: Boot case and run driver
+        env:
+          CASE_HOST: 127.0.0.1
+        run: |
+          set -uo pipefail
+          PORT="${LEG_PORT}"
+          LOG="$RUNNER_TEMP/${CASE}-${{ matrix.pool }}.log"
+          PORT="$PORT" POOL="$POOL" \
+            pnpm -F "@coraza/matrix-${CASE}" start \
+            > "$LOG" 2>&1 &
+          APP_PID=$!
+          echo "APP_PID=$APP_PID" >> "$GITHUB_ENV"
+          echo "LOG=$LOG" >> "$GITHUB_ENV"
+
+          set +e
+          # Turbopack dev server needs longer to first-boot because it
+          # compiles middleware on the first request rather than ahead
+          # of time.
+          CASE_PORT="$PORT" CASE_NAME="${CASE}" BOOT_TIMEOUT=90 \
+            node testing/matrix/scripts/check.mjs
+          rc=$?
+          set -e
+
+          kill -TERM "$APP_PID" 2>/dev/null || true
+          pkill -TERM -P "$APP_PID" 2>/dev/null || true
+          wait "$APP_PID" 2>/dev/null || true
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::${CASE} server log"
+            tail -n 200 "$LOG" || true
+            echo "::endgroup::"
+            exit "$rc"
+          fi
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: matrix-log-${{ matrix.case }}-${{ matrix.pool }}
+          path: ${{ env.LOG }}
+          retention-days: 14
