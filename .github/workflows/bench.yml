@@ -1,18 +1,40 @@
-# Reproducible k6 benchmark. Runs the same mixed-traffic workload as
-# `pnpm k6 -- --adapters=<adapter> --duration=20s --vus=50` on a clean
-# runner, so regressions show up without needing someone to boot the
-# reference Ryzen box.
+# Reproducible k6 benchmark. Three trigger modes:
+#
+#   schedule (Mon 05:00 UTC)
+#     The "weekly trend" run. Express + Fastify + NestJS, full 20s window,
+#     measured against BASELINE_RPS (the docs/site/index.html#perf number
+#     measured on the reference Ryzen 7 7800X3D). Fails the job if the
+#     express leg's WAF=on RPS regresses by >REGRESSION_PCT_WEEKLY% vs
+#     that absolute baseline.
+#
+#   workflow_dispatch
+#     Same matrix as scheduled, but never fails — safe ad-hoc run after a
+#     perf-touching change so you can read the numbers without breaking
+#     anyone's main.
+#
+#   pull_request (main, develop)
+#     The "per-PR gate". Express only (leanest stack, fastest signal),
+#     30s WAF=on window, 15s WAF=off (we only gate on WAF=on).
+#     The gate computes deltas against a same-runner baseline taken in
+#     the same job: we re-bench `origin/main` (or the PR's base ref),
+#     then re-bench the PR head, then compare. We DO NOT compare against
+#     BASELINE_RPS on per-PR runs because GitHub-hosted runners are too
+#     noisy to gate against an absolute number measured elsewhere.
+#
+#     Per-PR thresholds (RPS_DROP_PCT, P99_RISE_PCT) are looser than the
+#     weekly run because:
+#       - same-runner A/B noise on a 30s window is ~3-7% on RPS, ~10-15%
+#         on p99, so anything tighter alarms on noise;
+#       - we'd rather miss a borderline 8% regression at PR time and
+#         catch it weekly than block every other PR on noise.
 #
 # Caveat: GitHub-hosted runners are noisier than a dedicated machine.
-# Expect ~±15% run-to-run variance on absolute RPS. The docs numbers
+# Expect ~±15% run-to-run variance on absolute RPS for the scheduled run;
+# the per-PR run (same runner, same job, baseline + candidate back-to-back)
+# is much tighter. The docs numbers
 # (docs/site/index.html#perf, README.md) are measured on a Ryzen 7 7800X3D
 # and stay authoritative unless re-measured on the reference box — this
 # job is a regression alarm, not a replacement.
-#
-# Schedule: weekly (Monday 05:00 UTC) + manual dispatch. On the scheduled
-# run we fail the job if WAF-on RPS regresses by >10% vs. BASELINE_RPS
-# below. On workflow_dispatch we only report — never fail — so it's safe
-# to run ad-hoc after a perf-touching change.
 #
 # Update BASELINE_RPS whenever docs numbers are re-measured on the
 # reference machine.
@@ -23,17 +45,26 @@ on:
   schedule:
     - cron: '0 5 * * 1'
   workflow_dispatch:
+  pull_request:
+    branches: [main, develop]
 
 concurrency:
   group: bench-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
+  # `pull-requests: write` lets the per-PR job post the gate summary as
+  # a sticky comment. Schedule + dispatch still only need `contents: read`,
+  # but GitHub Actions doesn't support per-event permissions blocks; using
+  # the union is fine — the schedule branch never calls the comment step.
   contents: read
+  pull-requests: write
 
 jobs:
+  # The original weekly / dispatch run, unchanged in shape.
   bench:
     name: Bench · ${{ matrix.adapter }}
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -49,7 +80,7 @@ jobs:
       # in docs/site/index.html#perf. The job only gates on RPS — p95/p99
       # are advisory because tail latency is too runner-noisy to alarm on.
       BASELINE_RPS: '4857'
-      REGRESSION_PCT: '10'
+      REGRESSION_PCT_WEEKLY: '10'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -84,9 +115,19 @@ jobs:
       - name: Build example app + deps
         run: pnpm turbo run build --filter=@coraza/example-${{ matrix.adapter }}...
 
-      # k6 is published as an apt package via Grafana's repo — pinning to
-      # a hashed keyring instead of apt-key (deprecated).
-      - name: Install k6
+      # Cache the k6 .deb across runs so the install step is ~instant on
+      # cache hits. We pin to a major (`k6=*`) and trust Grafana's apt
+      # repo to provide the latest patch. The cache key includes runner.os
+      # so a dist upgrade invalidates cleanly.
+      - name: Cache k6 binary
+        id: k6-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: /usr/local/bin/k6
+          key: k6-${{ runner.os }}-stable
+
+      - name: Install k6 (cache miss)
+        if: steps.k6-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           sudo gpg -k
@@ -96,7 +137,13 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/k6.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends k6
+          # Move into the cached path so subsequent runs skip apt entirely.
+          sudo cp "$(command -v k6)" /usr/local/bin/k6
           k6 version
+
+      - name: Verify k6 (cache hit)
+        if: steps.k6-cache.outputs.cache-hit == 'true'
+        run: k6 version
 
       - name: Run k6 benchmark
         id: k6
@@ -138,8 +185,8 @@ jobs:
             cat "$log"
             exit 1
           fi
-          echo "Measured WAF-on RPS: $rps (baseline: $BASELINE_RPS, regression gate: ${REGRESSION_PCT}%)"
-          awk -v rps="$rps" -v base="$BASELINE_RPS" -v pct="$REGRESSION_PCT" '
+          echo "Measured WAF-on RPS: $rps (baseline: $BASELINE_RPS, regression gate: ${REGRESSION_PCT_WEEKLY}%)"
+          awk -v rps="$rps" -v base="$BASELINE_RPS" -v pct="$REGRESSION_PCT_WEEKLY" '
             BEGIN {
               floor = base * (1 - pct/100)
               if (rps + 0 < floor) {
@@ -149,3 +196,210 @@ jobs:
               printf "OK: %.1f RPS >= %.1f (within %s%% of %s)\n", rps, floor, pct, base
             }
           '
+
+  # Per-PR gate. Express only, same-runner A/B against the PR's base ref.
+  # Self-contained — does not depend on the weekly job above. Skips entirely
+  # for non-PR triggers via the top-level `if`.
+  bench-pr:
+    name: Bench gate (express, PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Same-runner A/B is much tighter than absolute. Picked after
+      # confirming the gate flags a contrived 20% RPS drop / +66% p99 spike
+      # while letting normal run-to-run jitter (~5% RPS, ~10% p99) through.
+      RPS_DROP_PCT: '10'
+      P99_RISE_PCT: '15'
+      # PR-time runs are short — fast feedback over absolute precision.
+      PR_DURATION: '30s'
+      PR_VUS: '50'
+    steps:
+      # We need both the PR head AND the base commit, so use a full checkout
+      # rather than the default shallow one. fetch-depth: 0 avoids a separate
+      # `git fetch` for the base ref later.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # WASM cache shared with CI / weekly bench. Hashes the same inputs.
+      - name: Cache compiled coraza.wasm
+        id: wasm-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: packages/core/src/wasm/coraza.wasm
+          key: wasm-${{ runner.os }}-${{ hashFiles('wasm/**/*.go', 'wasm/go.mod', 'wasm/go.sum', 'wasm/Dockerfile*', 'wasm/Makefile', 'wasm/version.txt') }}
+          # Read-only restore from any previous wasm key so we can use
+          # main's wasm if PR didn't change wasm/ — most PRs don't.
+          restore-keys: |
+            wasm-${{ runner.os }}-
+
+      - name: Build WASM (cache miss)
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: make -C wasm wasm-docker
+
+      - uses: pnpm/action-setup@903f9c1a6ebcba6cf41d87230be49611ac97822e # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      # Shared k6 binary cache with the weekly job. Same key.
+      - name: Cache k6 binary
+        id: k6-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: /usr/local/bin/k6
+          key: k6-${{ runner.os }}-stable
+
+      - name: Install k6 (cache miss)
+        if: steps.k6-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends k6
+          sudo cp "$(command -v k6)" /usr/local/bin/k6
+          k6 version
+
+      - name: Verify k6 (cache hit)
+        if: steps.k6-cache.outputs.cache-hit == 'true'
+        run: k6 version
+
+      # Resolve the base commit. For pull_request the SHA we want is
+      # github.event.pull_request.base.sha — it's the commit on `main`
+      # (or `develop`) that the PR diverged from at PR-event time. Using
+      # `origin/main` HEAD instead would re-bench whatever just merged,
+      # introducing flakier deltas.
+      - name: Record refs
+        id: refs
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "Base: $base"
+          echo "Head: $head"
+
+      # ===== BASELINE bench =====
+      # We worktree out the base commit so we don't disturb the candidate
+      # checkout. pnpm install + build are run inside the worktree.
+      - name: Worktree out base ref
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base }}
+        run: |
+          set -euo pipefail
+          git worktree add ../base-ref "$BASE_SHA"
+          ls ../base-ref
+
+      - name: Install + build (baseline)
+        working-directory: ../base-ref
+        run: |
+          set -euo pipefail
+          # Reuse the candidate's wasm so we're benching the SAME engine
+          # binary against the SAME engine binary — we're isolating
+          # adapter/core TS changes, not WASM rebuilds. (If a PR touches
+          # wasm/, the WASM will rebuild for the candidate but the base
+          # bench still uses base's wasm — for that case the deltas are
+          # legitimately measuring base→PR engine swaps, which is fine.)
+          mkdir -p packages/core/src/wasm
+          cp ${{ github.workspace }}/packages/core/src/wasm/coraza.wasm packages/core/src/wasm/coraza.wasm || true
+          # If the base commit didn't have a built wasm (unlikely on main
+          # but possible if the wasm path moved), fall back to a docker build.
+          if [ ! -s packages/core/src/wasm/coraza.wasm ]; then
+            make -C wasm wasm-docker
+          fi
+          pnpm install --frozen-lockfile
+          pnpm turbo run build --filter=@coraza/example-express...
+
+      - name: Run k6 (baseline)
+        working-directory: ../base-ref
+        run: |
+          set -euo pipefail
+          mkdir -p bench/results
+          pnpm -F @coraza/bench k6 -- \
+            --adapters=express \
+            --duration=${PR_DURATION} \
+            --vus=${PR_VUS} \
+            | tee bench/results/express-baseline.log
+          # Copy the JSON summary into a stable name. k6-run.ts writes
+          # /tmp/k6-express-<ts>.json; we only care about the WAF=on run,
+          # which is the second (last) one written.
+          summary="$(ls -t /tmp/k6-express-*.json | head -1)"
+          mkdir -p ${{ github.workspace }}/bench/results
+          cp "$summary" ${{ github.workspace }}/bench/results/express-baseline.json
+          # Drop the /tmp summaries so the candidate run starts clean.
+          rm -f /tmp/k6-express-*.json
+
+      # ===== CANDIDATE bench =====
+      - name: Install + build (candidate)
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm turbo run build --filter=@coraza/example-express...
+
+      - name: Run k6 (candidate)
+        run: |
+          set -euo pipefail
+          mkdir -p bench/results
+          pnpm -F @coraza/bench k6 -- \
+            --adapters=express \
+            --duration=${PR_DURATION} \
+            --vus=${PR_VUS} \
+            | tee bench/results/express-candidate.log
+          summary="$(ls -t /tmp/k6-express-*.json | head -1)"
+          cp "$summary" bench/results/express-candidate.json
+
+      # ===== Gate =====
+      # tsx is part of @coraza/bench's deps, so this works without a
+      # separate install step.
+      - name: Evaluate gate
+        id: gate
+        run: |
+          set -uo pipefail
+          mkdir -p bench/results
+          # We need to capture gate.ts's stdout AND propagate its exit code
+          # (gate.ts exits 1 on regression). `set -e` would short-circuit
+          # before we extract the markdown body for the comment step, so
+          # we capture rc explicitly and exit at the end.
+          pnpm -F @coraza/bench gate -- \
+            --baseline=${{ github.workspace }}/bench/results/express-baseline.json \
+            --candidate=${{ github.workspace }}/bench/results/express-candidate.json \
+            --rps-drop-pct=${RPS_DROP_PCT} \
+            --p99-rise-pct=${P99_RISE_PCT} \
+            --label=express \
+            > bench/results/gate-stdout.txt
+          rc=$?
+          # Carve the markdown body out for the comment step.
+          awk '/<!--BEGIN_BENCH_GATE_MD-->/{flag=1; next} /<!--END_BENCH_GATE_MD-->/{flag=0} flag' \
+            bench/results/gate-stdout.txt > bench/results/gate-comment.md
+          cat bench/results/gate-comment.md
+          exit $rc
+
+      # Sticky comment so re-runs / new commits update in place rather
+      # than spamming. Identified by `header: bench-gate-express` so this
+      # comment is the only one the action ever updates.
+      - name: Post / update PR comment
+        if: always() && github.event.pull_request.number != ''
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: bench-gate-express
+          path: bench/results/gate-comment.md
+
+      - name: Upload PR bench artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-pr-express
+          path: bench/results/
+          retention-days: 30
+          if-no-files-found: warn
