@@ -198,7 +198,7 @@ function extractRuleIds(extra: string): number[] {
   let match: RegExpExecArray | null
   ID_TOKEN_RE.lastIndex = 0
   while ((match = ID_TOKEN_RE.exec(extra)) !== null) {
-    ids.push(Number.parseInt(match[2], 10))
+    ids.push(Number.parseInt(match[2]!, 10))
   }
   return ids
 }
