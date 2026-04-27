@@ -427,6 +427,96 @@ describe('@coraza/next', () => {
     await mw(makeReq('https://example.com/x'))
     expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
   })
+
+  // Issue #29 — onWAFError lacks circuit breaker / per-error fallback.
+  // Function form receives `consecutiveErrors`/`totalErrors`/`since`.
+  // Both 'allow' and 'block' return verdicts are honored.
+  it('issue #29: onWAFError function form receives consecutiveErrors/totalErrors/since and honors verdict', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('synthetic')
+      }
+      return tx
+    }
+    const calls: Array<{ err: string; ctx: { consecutiveErrors: number; totalErrors: number; since: Date } }> = []
+    const mw = coraza({
+      waf,
+      onWAFError: (err, ctx) => {
+        calls.push({ err: err.message, ctx: { ...ctx } })
+        // Block on first 3 errors, then allow until next success.
+        return ctx.consecutiveErrors <= 3 ? 'block' : 'allow'
+      },
+    })
+    const r1 = await mw(makeReq('https://example.com/'))
+    const r2 = await mw(makeReq('https://example.com/'))
+    const r3 = await mw(makeReq('https://example.com/'))
+    const r4 = await mw(makeReq('https://example.com/'))
+    expect(r1.status).toBe(503)
+    expect(r2.status).toBe(503)
+    expect(r3.status).toBe(503)
+    // 4th call hits the 'allow' branch — request passes through.
+    expect(r4.headers.get('x-middleware-next')).toBe('1')
+    // Counters: consecutiveErrors increments on each failure.
+    expect(calls.map((c) => c.ctx.consecutiveErrors)).toEqual([1, 2, 3, 4])
+    expect(calls.map((c) => c.ctx.totalErrors)).toEqual([1, 2, 3, 4])
+    // `since` is the same Date object across the whole consecutive run
+    // (resets only on a successful WAF evaluation).
+    expect(calls[0]!.ctx.since.getTime()).toBe(calls[3]!.ctx.since.getTime())
+    // Each call sees the original error.
+    expect(calls.every((c) => c.err === 'synthetic')).toBe(true)
+  })
+
+  it('issue #29: consecutiveErrors resets after a successful WAF evaluation', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    let failures = 2
+    waf.newTransaction = () => {
+      if (failures > 0) {
+        failures--
+        const tx = realNew()
+        tx.processRequestBundle = () => {
+          throw new Error('flap')
+        }
+        return tx
+      }
+      return realNew() // healthy from now on
+    }
+    const observed: number[] = []
+    const mw = coraza({
+      waf,
+      onWAFError: (_err, ctx) => {
+        observed.push(ctx.consecutiveErrors)
+        return 'block'
+      },
+    })
+    await mw(makeReq('https://example.com/')) // err 1
+    await mw(makeReq('https://example.com/')) // err 2
+    // Now WAF is healthy; success resets consecutiveErrors.
+    await mw(makeReq('https://example.com/')) // success
+    // Force one more error to inspect counter post-reset.
+    failures = 1
+    await mw(makeReq('https://example.com/')) // err 1 again (fresh run)
+    expect(observed).toEqual([1, 2, 1])
+  })
+
+  it('issue #29: throwing policy falls back to block (fail-closed)', async () => {
+    const { waf } = mockWAF('block')
+    waf.newTransaction = () => {
+      throw new Error('boom')
+    }
+    const mw = coraza({
+      waf,
+      onWAFError: () => {
+        throw new Error('policy crashed')
+      },
+    })
+    const res = await mw(makeReq('https://example.com/'))
+    // A throwing policy must NOT become a request bypass.
+    expect(res.status).toBe(503)
+  })
 })
 
 // Compose-with-existing-proxy contract. The runner exposes a structured

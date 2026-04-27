@@ -662,4 +662,38 @@ describe('@coraza/express', () => {
       expect.objectContaining({ ruleId: 941100 }),
     )
   })
+
+  // Issue #29 — onWAFError lacks circuit breaker / per-error policy.
+  // Function form receives consecutiveErrors / totalErrors / since
+  // and either 'allow' or 'block' return verdicts are honored.
+  it('issue #29: onWAFError function form receives counters and honors verdict', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('synthetic')
+      }
+      return tx
+    }
+    const calls: Array<{ consecutiveErrors: number; totalErrors: number; since: Date }> = []
+    const app = express()
+    app.use(
+      coraza({
+        waf,
+        onWAFError: (_err, ctx) => {
+          calls.push({ ...ctx })
+          return ctx.consecutiveErrors <= 2 ? 'block' : 'allow'
+        },
+      }),
+    )
+    app.get('/hi', (_req, res) => res.status(200).send('ok'))
+    expect((await request(app).get('/hi')).status).toBe(503) // err 1 → block
+    expect((await request(app).get('/hi')).status).toBe(503) // err 2 → block
+    expect((await request(app).get('/hi')).status).toBe(200) // err 3 → allow → next() → 200
+    expect(calls.map((c) => c.consecutiveErrors)).toEqual([1, 2, 3])
+    expect(calls.map((c) => c.totalErrors)).toEqual([1, 2, 3])
+    // `since` is the same timestamp across the consecutive run.
+    expect(calls[0]!.since.getTime()).toBe(calls[2]!.since.getTime())
+  })
 })

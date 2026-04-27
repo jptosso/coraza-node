@@ -530,4 +530,33 @@ describe('@coraza/fastify', () => {
     expect(calls.some((s) => s.includes('941100'))).toBe(true)
     await app.close()
   })
+
+  // Issue #29 — onWAFError function form: counters + honored verdict.
+  it('issue #29: onWAFError function form receives counters and honors verdict', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('synthetic')
+      }
+      return tx
+    }
+    const calls: Array<{ consecutiveErrors: number; totalErrors: number; since: Date }> = []
+    const app = Fastify({ logger: false })
+    await app.register(coraza, {
+      waf,
+      onWAFError: (_err, ctx) => {
+        calls.push({ ...ctx })
+        return ctx.consecutiveErrors <= 2 ? 'block' : 'allow'
+      },
+    })
+    app.get('/hi', async () => 'ok')
+    expect((await app.inject({ method: 'GET', url: '/hi' })).statusCode).toBe(503)
+    expect((await app.inject({ method: 'GET', url: '/hi' })).statusCode).toBe(503)
+    expect((await app.inject({ method: 'GET', url: '/hi' })).statusCode).toBe(200)
+    expect(calls.map((c) => c.consecutiveErrors)).toEqual([1, 2, 3])
+    expect(calls[0]!.since.getTime()).toBe(calls[2]!.since.getTime())
+    await app.close()
+  })
 })

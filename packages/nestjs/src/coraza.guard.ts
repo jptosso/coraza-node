@@ -42,6 +42,23 @@ export interface CorazaBlockContext {
 type OnBlock = (interruption: Interruption, ctx?: CorazaBlockContext) => HttpException
 
 /**
+ * Context handed to a function-form `onWAFError`. Counters are
+ * guard-instance-scoped (Nest creates one CorazaGuard per request
+ * scope by default; for app-wide counters use a singleton-scoped
+ * provider, which is the default for `forRoot`/`forRootAsync`).
+ */
+export interface OnWAFErrorContext {
+  consecutiveErrors: number
+  totalErrors: number
+  since: Date
+}
+
+export type OnWAFErrorPolicy =
+  | 'allow'
+  | 'block'
+  | ((err: Error, ctx: OnWAFErrorContext) => 'allow' | 'block' | Promise<'allow' | 'block'>)
+
+/**
  * Default `onBlock` for `CorazaModule.forRoot`: a 403-ish HttpException
  * carrying the matched rule id. Exported so consumers who want to wrap
  * the default can delegate to it:
@@ -83,9 +100,18 @@ type AnyTx = Transaction | WorkerTransaction
 export class CorazaGuard implements CanActivate {
   private readonly logger = new Logger('CorazaGuard')
   private readonly matcher: ((ctx: IgnoreContext) => IgnoreVerdict) | null
-  private readonly onWAFError: 'allow' | 'block'
+  private readonly onWAFError: OnWAFErrorPolicy
   private readonly onBlock: OnBlock
   private readonly verboseLog: boolean
+
+  // Failure-history state for the function form of `onWAFError`.
+  // Singleton-scoped (the default for forRoot/forRootAsync) so counters
+  // accumulate process-wide; if the consumer registers CorazaGuard with
+  // a request scope they get per-request counters (less useful for
+  // circuit-breaking but valid).
+  private consecutiveErrors = 0
+  private totalErrors = 0
+  private since = new Date(0)
 
   constructor(
     @Inject(CORAZA_WAF) private readonly waf: AnyWAF,
@@ -93,7 +119,7 @@ export class CorazaGuard implements CanActivate {
     opts: {
       ignore?: IgnoreSpec | false
       skip?: SkipOptions | false
-      onWAFError?: 'allow' | 'block'
+      onWAFError?: OnWAFErrorPolicy
       onBlock?: OnBlock
       verboseLog?: boolean
     } = {},
@@ -102,6 +128,29 @@ export class CorazaGuard implements CanActivate {
     this.onWAFError = opts.onWAFError ?? 'block'
     this.onBlock = opts.onBlock ?? defaultOnBlock
     this.verboseLog = opts.verboseLog ?? false
+  }
+
+  private async onError(err: Error): Promise<'allow' | 'block'> {
+    if (this.consecutiveErrors === 0) this.since = new Date()
+    this.consecutiveErrors++
+    this.totalErrors++
+    if (this.onWAFError === 'allow' || this.onWAFError === 'block') return this.onWAFError
+    try {
+      return await this.onWAFError(err, {
+        consecutiveErrors: this.consecutiveErrors,
+        totalErrors: this.totalErrors,
+        since: this.since,
+      })
+    } catch {
+      return 'block'
+    }
+  }
+
+  private recordSuccess(): void {
+    if (this.consecutiveErrors > 0) {
+      this.consecutiveErrors = 0
+      this.since = new Date(0)
+    }
   }
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -115,8 +164,10 @@ export class CorazaGuard implements CanActivate {
     try {
       tx = await this.waf.newTransaction()
     } catch (err) {
-      this.logger.error(`newTransaction failed: ${(err as Error).message}`)
-      if (this.onWAFError === 'block') {
+      const e = err instanceof Error ? err : new Error(String(err))
+      this.logger.error(`newTransaction failed: ${e.message}`)
+      const policy = await this.onError(e)
+      if (policy === 'block') {
         throw this.onBlock({
           ruleId: 0,
           action: 'deny',
@@ -160,10 +211,16 @@ export class CorazaGuard implements CanActivate {
             matched = undefined
           }
         }
+        // A genuine block is still a successful WAF evaluation.
+        this.recordSuccess()
+      } else {
+        this.recordSuccess()
       }
     } catch (err) {
-      this.logger.error(`middleware error: ${(err as Error).message}`)
-      if (this.onWAFError === 'block') {
+      const e = err instanceof Error ? err : new Error(String(err))
+      this.logger.error(`middleware error: ${e.message}`)
+      const policy = await this.onError(e)
+      if (policy === 'block') {
         try {
           await tx.processLogging()
         } finally {

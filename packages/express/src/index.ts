@@ -80,17 +80,19 @@ export interface CorazaExpressOptions {
   skip?: SkipOptions | false
   /**
    * What to do if the WAF itself throws mid-request (WASM trap, pool
-   * worker crash, bundle encoding error, etc.).
+   * worker crash, bundle encoding error, etc.). Three forms:
    *
    *   'allow' — call next() and let the request through (fail-open).
-   *             Matches pre-2.x behavior but is an attack vector: a
-   *             crafted request that reliably crashes the WAF becomes a
-   *             bypass. Only use if availability beats security for you.
+   *   'block' — respond with 503 via onBlock (fail-closed, default).
+   *   (err, ctx) => 'allow' | 'block' — per-error policy. ctx tracks
+   *               `consecutiveErrors`, `totalErrors`, `since`. Lets you
+   *               implement circuit-breaker / rate / per-error-class
+   *               policy without `@coraza/express` enforcing one. A
+   *               throwing policy falls back to 'block' (fail-closed).
    *
-   *   'block' — respond with 503 via onBlock (fail-closed). Default.
-   *             Matches what a dedicated WAF sidecar would do.
+   * @default 'block'
    */
-  onWAFError?: 'allow' | 'block'
+  onWAFError?: OnWAFErrorPolicy
   /**
    * When `true`, emit one `log.warn('coraza: matched', { ... })` per
    * matched rule on a block (ModSecurity error.log style). Adds an
@@ -108,6 +110,25 @@ export interface CorazaExpressOptions {
 export interface CorazaBlockContext {
   matchedRules: MatchedRule[]
 }
+
+/**
+ * Context handed to a function-form `onWAFError`. Counters are
+ * adapter-instance-scoped (one per `coraza()` call); they don't reset
+ * across instances and persist for the process lifetime.
+ */
+export interface OnWAFErrorContext {
+  /** Errors since the last successful WAF evaluation (resets on success). */
+  consecutiveErrors: number
+  /** Process-lifetime error count for this adapter instance. */
+  totalErrors: number
+  /** Timestamp of the first error in the current consecutive run. */
+  since: Date
+}
+
+export type OnWAFErrorPolicy =
+  | 'allow'
+  | 'block'
+  | ((err: Error, ctx: OnWAFErrorContext) => 'allow' | 'block' | Promise<'allow' | 'block'>)
 
 type ReqWithLog = Request & { log?: Logger }
 
@@ -138,6 +159,31 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     return wafRef
   }
 
+  // Failure-history state for the function form of `onWAFError`. We
+  // intentionally do NOT enforce a default circuit breaker — counters
+  // are exposed verbatim to the consumer's policy.
+  let consecutiveErrors = 0
+  let totalErrors = 0
+  let since = new Date(0)
+  const onError = async (err: Error): Promise<'allow' | 'block'> => {
+    if (consecutiveErrors === 0) since = new Date()
+    consecutiveErrors++
+    totalErrors++
+    if (onWAFError === 'allow' || onWAFError === 'block') return onWAFError
+    try {
+      return await onWAFError(err, { consecutiveErrors, totalErrors, since })
+    } catch {
+      // A throwing policy must not become a request bypass.
+      return 'block'
+    }
+  }
+  const recordSuccess = (): void => {
+    if (consecutiveErrors > 0) {
+      consecutiveErrors = 0
+      since = new Date(0)
+    }
+  }
+
   // `waf` is either a sync WAF or an async WAFPool. Both expose the same
   // surface (newTransaction / Transaction has the same method names). We
   // `await` every call so the middleware works against either.
@@ -154,8 +200,10 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
       // If the WAF promise itself rejects we can't open a transaction or
       // route through onBlock's logger. Treat as fail-closed by default.
       const log = (req as ReqWithLog).log ?? consoleLogger
-      log.error('coraza: waf promise rejected', { err: (err as Error).message })
-      if (onWAFError === 'block' && !res.headersSent) {
+      const e = err instanceof Error ? err : new Error(String(err))
+      log.error('coraza: waf promise rejected', { err: e.message })
+      const verdict = await onError(e)
+      if (verdict === 'block' && !res.headersSent) {
         onBlock(
           { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
           req,
@@ -172,8 +220,10 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     try {
       tx = await waf.newTransaction()
     } catch (err) {
-      log.error('coraza: newTransaction failed', { err: (err as Error).message })
-      if (onWAFError === 'block' && !res.headersSent) {
+      const e = err instanceof Error ? err : new Error(String(err))
+      log.error('coraza: newTransaction failed', { err: e.message })
+      const verdict = await onError(e)
+      if (verdict === 'block' && !res.headersSent) {
         onBlock(
           { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
           req,
@@ -214,8 +264,12 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
       const bodyBuf = verdict === 'skip-body' ? undefined : extractBody(req)
       const interrupted = await tx.processRequestBundle(reqInfo, bodyBuf)
       if (interrupted) {
+        // A genuine block is still a successful WAF evaluation — counters reset.
+        recordSuccess()
         return emitBlock(await tx.interruption(), req, res, onBlock, log, tx, verboseLog)
       }
+      // Request passed cleanly — counters reset.
+      recordSuccess()
 
       if (inspectResponse) {
         // Response hooks patch res.writeHead / res.end synchronously. They
@@ -242,8 +296,10 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
 
       next()
     } catch (err) {
-      log.error('coraza: middleware error', { err: (err as Error).message })
-      if (onWAFError === 'block') {
+      const e = err instanceof Error ? err : new Error(String(err))
+      log.error('coraza: middleware error', { err: e.message })
+      const verdict = await onError(e)
+      if (verdict === 'block') {
         // Fail-closed: synthesize a 503 block verdict so a crash in the
         // WAF can't be weaponized into a bypass.
         if (!res.headersSent) {

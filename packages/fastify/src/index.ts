@@ -66,13 +66,14 @@ export interface CorazaFastifyOptions {
    */
   skip?: SkipOptions | false
   /**
-   * What to do if the WAF throws mid-request.
-   *   'block' (default) — respond 503 (fail-closed). A crash in the WAF
-   *                       must not become a bypass.
-   *   'allow'           — pass through. Only for availability-critical
-   *                       setups; document why you flipped it.
+   * What to do if the WAF throws mid-request. Three forms:
+   *   'block' (default) — respond 503 (fail-closed).
+   *   'allow'           — pass through (fail-open).
+   *   (err, ctx) => 'allow' | 'block' — per-error policy, ctx tracks
+   *               consecutiveErrors / totalErrors / since. Throwing
+   *               policy falls back to 'block'.
    */
-  onWAFError?: 'allow' | 'block'
+  onWAFError?: OnWAFErrorPolicy
   /**
    * When `true`, emit one `log.warn('coraza: matched', { ... })` per
    * matched rule on a block. Default `false`. The default block log
@@ -88,6 +89,17 @@ export interface CorazaFastifyOptions {
 export interface CorazaBlockContext {
   matchedRules: MatchedRule[]
 }
+
+export interface OnWAFErrorContext {
+  consecutiveErrors: number
+  totalErrors: number
+  since: Date
+}
+
+export type OnWAFErrorPolicy =
+  | 'allow'
+  | 'block'
+  | ((err: Error, ctx: OnWAFErrorContext) => 'allow' | 'block' | Promise<'allow' | 'block'>)
 
 const TX_SYMBOL = Symbol('coraza.tx')
 type AnyTx = Transaction | WorkerTransaction
@@ -108,6 +120,28 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
   // subsequent hook sees a settled value.
   const waf: AnyWAF = await wafOrPromise
 
+  // Failure-history state for the function form of `onWAFError`.
+  let consecutiveErrors = 0
+  let totalErrors = 0
+  let since = new Date(0)
+  const onError = async (err: Error): Promise<'allow' | 'block'> => {
+    if (consecutiveErrors === 0) since = new Date()
+    consecutiveErrors++
+    totalErrors++
+    if (onWAFError === 'allow' || onWAFError === 'block') return onWAFError
+    try {
+      return await onWAFError(err, { consecutiveErrors, totalErrors, since })
+    } catch {
+      return 'block'
+    }
+  }
+  const recordSuccess = (): void => {
+    if (consecutiveErrors > 0) {
+      consecutiveErrors = 0
+      since = new Date(0)
+    }
+  }
+
   fastify.decorateRequest(TX_SYMBOL as unknown as string, null)
 
   // One fused preHandler — body parser has run, so req.body is populated
@@ -122,10 +156,10 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
     try {
       tx = await waf.newTransaction()
     } catch (err) {
-      ;(req.log ?? waf.logger).error(
-        `coraza: newTransaction failed: ${(err as Error).message}`,
-      )
-      if (onWAFError === 'block' && !reply.sent) {
+      const e = err instanceof Error ? err : new Error(String(err))
+      ;(req.log ?? waf.logger).error(`coraza: newTransaction failed: ${e.message}`)
+      const verdict = await onError(e)
+      if (verdict === 'block' && !reply.sent) {
         await emitBlock(
           { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
           req,
@@ -156,16 +190,20 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
         body,
       )
       if (interrupted) {
+        // A genuine block is still a successful WAF evaluation.
+        recordSuccess()
         const it = await tx.interruption()
         if (it) {
           await emitBlock(it, req, reply, onBlock, tx, verboseLog)
         }
+      } else {
+        recordSuccess()
       }
     } catch (err) {
-      ;(req.log ?? waf.logger).error(
-        `coraza: middleware error: ${(err as Error).message}`,
-      )
-      if (onWAFError === 'block' && !reply.sent) {
+      const e = err instanceof Error ? err : new Error(String(err))
+      ;(req.log ?? waf.logger).error(`coraza: middleware error: ${e.message}`)
+      const verdict = await onError(e)
+      if (verdict === 'block' && !reply.sent) {
         await emitBlock(
           { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error', source: 'waf-error' },
           req,

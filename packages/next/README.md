@@ -163,6 +163,40 @@ coraza({
 `verboseLog` adds one `tx.matchedRules()` round-trip per blocked
 request; default is `false`.
 
+### Per-error policy on `onWAFError`
+
+`onWAFError` accepts the binary `'allow'` / `'block'` (default
+`'block'`) and a function form for circuit-breaker / rate / per-class
+policies. The function receives the original error plus a context
+object tracking the failure history; the runner does NOT enforce a
+default circuit breaker — you have the data, write the policy.
+
+```ts
+export const proxy = coraza({
+  waf,
+  onWAFError: (err, ctx) => {
+    metrics.increment('waf.error', { class: err.name })
+    // Block on the first ~10 transient failures, then fall open until
+    // the next successful tx (resets `consecutiveErrors`).
+    if (ctx.consecutiveErrors > 10) return 'allow'
+    // Process-lifetime breaker: if we've seen >1000 errors total, the
+    // WAF is poisoned — flip to 'allow' and rely on external alerting.
+    if (ctx.totalErrors > 1000) return 'allow'
+    return 'block'
+  },
+})
+```
+
+`ctx`:
+- `consecutiveErrors` — resets to 0 on the next successful WAF
+  evaluation (a clean tx OR a real CRS block).
+- `totalErrors` — process-lifetime counter for this adapter instance.
+- `since` — timestamp of the first error in the current consecutive
+  run; resets when `consecutiveErrors` resets.
+
+A throwing policy function falls back to `'block'` (fail-closed) — a
+crash in your circuit breaker can't become a request bypass.
+
 ### Body handling
 
 The runner reads the request body via `req.arrayBuffer()` before

@@ -73,11 +73,26 @@ export interface CorazaNextOptions {
    */
   skip?: SkipOptions | false
   /**
-   * What to do if the WAF throws mid-request. Default 'block' (fail
-   * closed with 503). 'allow' is an opt-in availability-over-security
-   * knob; see docs/threat-model.md before flipping it.
+   * What to do if the WAF throws mid-request. Three forms:
+   *
+   *   'block'   — respond 503 (fail-closed, default).
+   *   'allow'   — pass through (fail-open).
+   *   (err, ctx) => 'allow' | 'block' — per-error policy. Receives the
+   *               original error plus a context object tracking
+   *               `consecutiveErrors` (reset on the next successful
+   *               WAF evaluation), `totalErrors` (process-lifetime),
+   *               and `since` (Date of the first error in the current
+   *               consecutive run). Lets you implement circuit-breaker
+   *               patterns without `@coraza/next` enforcing one
+   *               opinion: e.g. "block on first 10 errors, then allow
+   *               until we see a successful tx, then re-arm" or
+   *               "allow only if all errors are this transient class".
+   *               If the function itself throws, the runner falls back
+   *               to 'block' (fail-closed).
+   *
+   * @default 'block'
    */
-  onWAFError?: 'allow' | 'block'
+  onWAFError?: OnWAFErrorPolicy
   /**
    * Whether to read the request body and feed it to Coraza. Default `true`.
    *
@@ -113,6 +128,39 @@ export interface CorazaNextOptions {
    */
   verboseLog?: boolean
 }
+
+/**
+ * Context handed to a function-form `onWAFError`. Counters are
+ * adapter-instance-scoped (one per `createCorazaRunner`/`coraza()`
+ * call); they don't reset across instances.
+ */
+export interface OnWAFErrorContext {
+  /**
+   * Errors since the last successful WAF evaluation. Resets to 0 on
+   * the next request that completes a transaction without throwing.
+   * Useful for distinguishing transient (single failed tx) from
+   * persistent (poisoned WAF) failures.
+   */
+  consecutiveErrors: number
+  /** Errors since the runner was constructed. Process-lifetime counter. */
+  totalErrors: number
+  /**
+   * Timestamp of the first error in the current consecutive run.
+   * Resets when `consecutiveErrors` resets to 0. Use to compute
+   * "errors per second" for rate-based policies.
+   */
+  since: Date
+}
+
+/**
+ * Policy form accepted by `onWAFError`. The function receives the
+ * thrown error and a `ctx` describing the failure history; it MUST
+ * return `'allow'` or `'block'` synchronously (or via Promise).
+ */
+export type OnWAFErrorPolicy =
+  | 'allow'
+  | 'block'
+  | ((err: Error, ctx: OnWAFErrorContext) => 'allow' | 'block' | Promise<'allow' | 'block'>)
 
 /**
  * Outcome returned by {@link createCorazaRunner}.
@@ -168,6 +216,34 @@ export function createCorazaRunner(
     return wafRef
   }
 
+  // Failure-history state for the function form of `onWAFError`. We
+  // intentionally do NOT enforce a default circuit breaker here — the
+  // counters are exposed verbatim to the consumer's policy function so
+  // they can implement whatever rate / class logic they need.
+  let consecutiveErrors = 0
+  let totalErrors = 0
+  let since = new Date(0)
+  const onError = async (err: Error): Promise<'allow' | 'block'> => {
+    if (consecutiveErrors === 0) since = new Date()
+    consecutiveErrors++
+    totalErrors++
+    if (onWAFError === 'allow' || onWAFError === 'block') return onWAFError
+    try {
+      return await onWAFError(err, { consecutiveErrors, totalErrors, since })
+    } catch {
+      // A throwing policy function must not become a request bypass —
+      // fail-closed is the safe default. Logged where the caller's
+      // logger is available; here we have no transaction logger yet.
+      return 'block'
+    }
+  }
+  const recordSuccess = (): void => {
+    if (consecutiveErrors > 0) {
+      consecutiveErrors = 0
+      since = new Date(0)
+    }
+  }
+
   return async function runCoraza(req: NextRequest): Promise<CorazaDecision> {
     const url = new URL(req.url)
     const verdict = matcher === null ? false : matcher(buildIgnoreCtx(req, url))
@@ -180,8 +256,10 @@ export function createCorazaRunner(
     try {
       tx = await waf.newTransaction()
     } catch (err) {
-      log.error('coraza: newTransaction failed', { err: (err as Error).message })
-      if (onWAFError === 'block') {
+      const e = err instanceof Error ? err : new Error(String(err))
+      log.error('coraza: newTransaction failed', { err: e.message })
+      const policy = await onError(e)
+      if (policy === 'block') {
         return {
           blocked: onBlock(
             { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
@@ -218,7 +296,10 @@ export function createCorazaRunner(
       )
       if (interrupted) {
         const interruption = await tx.interruption()
-        if (!interruption) return { allow: true }
+        if (!interruption) {
+          recordSuccess()
+          return { allow: true }
+        }
         // The WASM has already populated `interruption.data` ("Inbound
         // Anomaly Score Exceeded (Total Score: N)" for CRS 949110) so
         // including it in the default log is free. `tx.matchedRules()`
@@ -243,6 +324,10 @@ export function createCorazaRunner(
             })
           }
         }
+        // A genuine block is still a successful WAF evaluation — the
+        // engine ran, made a verdict, no exception was thrown — so the
+        // failure-history counters reset.
+        recordSuccess()
         // Only pass the 3rd arg when populated, so `toHaveBeenCalledWith(it, req)`
         // assertions in consumer tests don't see a stray `undefined` ctx.
         const blocked = matchedRules
@@ -251,10 +336,13 @@ export function createCorazaRunner(
         return { blocked }
       }
 
+      recordSuccess()
       return { allow: true }
     } catch (err) {
-      log.error('coraza: middleware error', { err: (err as Error).message })
-      if (onWAFError === 'block') {
+      const e = err instanceof Error ? err : new Error(String(err))
+      log.error('coraza: middleware error', { err: e.message })
+      const policy = await onError(e)
+      if (policy === 'block') {
         return {
           blocked: onBlock(
             { ruleId: 0, action: 'deny', status: 503, data: 'WAF internal error', source: 'waf-error' },
