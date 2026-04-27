@@ -60,6 +60,30 @@ export interface CorazaNextOptions {
    * knob; see docs/threat-model.md before flipping it.
    */
   onWAFError?: 'allow' | 'block'
+  /**
+   * Whether to read the request body and feed it to Coraza. Default `true`.
+   *
+   * When `false`, the runner skips `req.arrayBuffer()` entirely — the
+   * body is left untouched on the way to your route handler, and CRS's
+   * body-targeted rules (SQLi/XSS/RCE that match `ARGS_POST`/`REQUEST_BODY`)
+   * cannot fire. URL/header/cookie rules still evaluate normally, and
+   * the bundle still triggers phase 2 (anomaly score, etc.) on
+   * non-body inputs.
+   *
+   * Why you might flip it off:
+   *   - You're on a Next runtime that doesn't re-inject the body
+   *     reliably to the route handler after the proxy reads it.
+   *   - Body inspection is your dominant source of CRS false positives
+   *     and you'd rather defend with header/URL rules only.
+   *   - You're streaming large uploads that you don't want buffered
+   *     into Coraza memory.
+   *
+   * Security trade-off: significant. Body-targeted attacks (most XSS,
+   * many SQLi) won't be detected. Document why you flipped it.
+   *
+   * @default true
+   */
+  inspectBody?: boolean
 }
 
 /**
@@ -100,7 +124,12 @@ export type CorazaDecision = { blocked: Response } | { allow: true }
 export function createCorazaRunner(
   options: CorazaNextOptions,
 ): (req: NextRequest) => Promise<CorazaDecision> {
-  const { waf: wafOrPromise, onBlock = defaultBlock, onWAFError = 'block' } = options
+  const {
+    waf: wafOrPromise,
+    onBlock = defaultBlock,
+    onWAFError = 'block',
+    inspectBody = true,
+  } = options
   const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
   let wafRef: AnyWAF | null = null
@@ -137,11 +166,12 @@ export function createCorazaRunner(
     try {
       if (await tx.isRuleEngineOff()) return { allow: true }
 
-      // Read the body up front (Next streams it); the bundle needs it
-      // to guarantee phase 2 runs. `'skip-body'` short-circuits the body
-      // read entirely so we don't pay to materialize an oversized payload.
+      // to guarantee phase 2 runs. Skip the read when:
+      //   - the ignore: spec said `'skip-body'` (large-upload bypass), OR
+      //   - the consumer set `inspectBody: false` (body-targeted rules
+      //     disabled by config).
       const body =
-        verdict === 'skip-body'
+        verdict === 'skip-body' || !inspectBody
           ? undefined
           : hasBody(req)
             ? new Uint8Array(await req.arrayBuffer())
