@@ -113,7 +113,10 @@ jobs:
           CASE_HOST: 127.0.0.1
         run: |
           set -uo pipefail
-          PORT="${LEG_PORT}"
+          # Random high port per leg. The hardcoded 41000/42000 was
+          # occasionally pre-bound on the GHA runner image and caused
+          # EADDRINUSE flakes; randomization eliminates the class.
+          PORT=$(shuf -i 35000-60000 -n 1)
           LOG="$RUNNER_TEMP/${CASE}-${{ matrix.node }}-${{ matrix.pool }}.log"
           PORT="$PORT" POOL="$POOL" NODE_ENV=production \
             pnpm -F "@coraza/matrix-${CASE}" start \
@@ -193,7 +196,7 @@ jobs:
           CASE_HOST: 127.0.0.1
         run: |
           set -uo pipefail
-          PORT="${LEG_PORT}"
+          PORT=$(shuf -i 35000-60000 -n 1)
           LOG="$RUNNER_TEMP/${CASE}-${{ matrix.pool }}.log"
           PORT="$PORT" POOL="$POOL" \
             pnpm -F "@coraza/matrix-${CASE}" start \
