@@ -1,0 +1,517 @@
+name: Tarball smoke
+
+# Workspace builds prove the source tree compiles. They do NOT prove that
+# `npm install @coraza/core@preview` actually works for a downstream
+# consumer. A bug in any of the following would slip through workspace CI
+# and ship to npm undetected:
+#
+#   - `package.json` `files:` glob excludes a runtime asset (e.g. wasm)
+#   - `exports` map points at a file that isn't in the tarball
+#   - a pack-time transform (workspace: protocol rewrite, etc.) misfires
+#   - a peer dep moves to dependencies and the tarball pulls in junk
+#
+# This job closes that gap. For every PR to main/develop and on demand,
+# we:
+#
+#   1. Build every publishable package against the same WASM artifact
+#      ci.yml uses (cache shared, same key).
+#   2. Run `pnpm pack` per package — `pnpm pack` rewrites `workspace:*`
+#      protocol references to concrete versions, matching what
+#      `pnpm publish` (changesets) actually ships.
+#   3. Spin up a fresh project OUTSIDE the repo tree (`mktemp -d`) and
+#      `npm install <each-tgz>` — npm's resolver is the most-default
+#      consumer tooling and a different code path from pnpm's.
+#   4. For every adapter (express, fastify, nestjs, next-as-proxy), boot
+#      a minimal consumer that imports adapter + core + coreruleset from
+#      the installed tarballs and run the canonical 3-scenario probe:
+#        GET /search?q=hello       → 200  (benign)
+#        GET /search?q=<SQLi>      → 403  (CRS 942xxx)
+#        POST /echo  body=<XSS>    → 403  (CRS 941xxx)
+#
+# A failure in any leg is a release-blocking bug.
+
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: tarball-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-wasm:
+    name: Build WASM (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Same cache key as ci.yml / matrix.yml so smoke legs share the WASM
+      # artifact with the regular CI pipeline. A cache hit here means
+      # zero-cost WASM regardless of which workflow populated it first.
+      - name: Cache compiled coraza.wasm
+        id: wasm-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: packages/core/src/wasm/coraza.wasm
+          key: wasm-${{ runner.os }}-${{ hashFiles('wasm/**/*.go', 'wasm/go.mod', 'wasm/go.sum', 'wasm/Dockerfile*', 'wasm/Makefile', 'wasm/version.txt') }}
+          restore-keys: ''
+
+      - name: Build with reproducible Docker image
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: make -C wasm wasm-docker
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coraza-wasm
+          path: packages/core/src/wasm/coraza.wasm
+          retention-days: 7
+
+  smoke:
+    name: Smoke · Node ${{ matrix.node }}
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coraza-wasm
+          path: packages/core/src/wasm
+      - uses: pnpm/action-setup@903f9c1a6ebcba6cf41d87230be49611ac97822e # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      # Build every publishable package. tsup emits dist/, and the core
+      # build's onSuccess hook copies coraza.wasm into dist/wasm/ — that
+      # copy is what `files: ["dist"]` ships in the tarball.
+      - name: Build all publishable packages
+        run: pnpm -F '@coraza/*' build
+
+      # `pnpm pack` performs the same `workspace:*` rewrite that
+      # `pnpm publish` does, so the tarball we produce is byte-equivalent
+      # (modulo tar metadata) to what changesets pushes to npm. `npm pack`
+      # would NOT rewrite, and a consumer would see EUNSUPPORTEDPROTOCOL.
+      - name: Pack tarballs
+        id: pack
+        run: |
+          set -euo pipefail
+          # Out-of-tree by design: a tmp dir under the runner's HOME so
+          # the pack/install workflow can't accidentally pollute the
+          # workspace and so the tarballs survive workspace cleans.
+          OUT="$(mktemp -d -t coraza-tarballs-XXXXXX)"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          for pkg in core coreruleset express fastify nestjs next; do
+            (cd "packages/$pkg" && pnpm pack --pack-destination "$OUT")
+          done
+          echo "--- tarballs ---"
+          ls -la "$OUT"
+
+      # Per-adapter consumer probes. Each adapter gets its own fresh
+      # consumer project under a sibling tmp directory; npm (NOT pnpm)
+      # is the installer because that's what most downstream readers will
+      # type. The probe asserts boot success AND the 3 expected status
+      # codes; one failed adapter fails the leg.
+      - name: Probe each adapter via npm install
+        env:
+          TARBALLS: ${{ steps.pack.outputs.out }}
+        run: |
+          set -euo pipefail
+
+          ROOT="$(mktemp -d -t coraza-consumers-XXXXXX)"
+          echo "consumers root: $ROOT"
+
+          # Resolve adapter tarball paths once.
+          CORE_TGZ=$(ls "$TARBALLS"/coraza-core-*.tgz)
+          CRS_TGZ=$(ls "$TARBALLS"/coraza-coreruleset-*.tgz)
+          EXPRESS_TGZ=$(ls "$TARBALLS"/coraza-express-*.tgz)
+          FASTIFY_TGZ=$(ls "$TARBALLS"/coraza-fastify-*.tgz)
+          NESTJS_TGZ=$(ls "$TARBALLS"/coraza-nestjs-*.tgz)
+          NEXT_TGZ=$(ls "$TARBALLS"/coraza-next-*.tgz)
+
+          # Random high port per adapter to avoid EADDRINUSE under matrix
+          # parallelism on the runner.
+          rand_port() { shuf -i 35000-60000 -n 1; }
+
+          # Generic probe driver for adapters that boot a real HTTP
+          # server (express/fastify/nestjs). Boots ./server.mjs, hits
+          # /healthz until ready, runs the 3 scenarios, kills the server.
+          probe_http_adapter() {
+            local name="$1"
+            local dir="$2"
+            local port; port="$(rand_port)"
+            local log="$ROOT/$name.log"
+
+            (cd "$dir" && PORT="$port" NODE_ENV=production node server.mjs > "$log" 2>&1) &
+            local pid=$!
+
+            # Wait up to 60s for boot.
+            local deadline=$(( $(date +%s) + 60 ))
+            local ready=""
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              if curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz" 2>/dev/null; then
+                ready=1; break
+              fi
+              sleep 0.5
+            done
+            if [ -z "$ready" ]; then
+              echo "::group::[$name] server log (boot timeout)"
+              tail -n 200 "$log" || true
+              echo "::endgroup::"
+              kill -TERM "$pid" 2>/dev/null || true
+              return 1
+            fi
+
+            # 3-scenario probe.
+            local s1 s2 s3
+            s1=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/search?q=hello" || echo 0)
+            s2=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/search?q=%27%2BOR%2B1%3D1--" || echo 0)
+            s3=$(curl -s -o /dev/null -w '%{http_code}' \
+                 -X POST -H 'content-type: application/json' \
+                 --data '{"msg":"<script>alert(1)</script>"}' \
+                 "http://127.0.0.1:$port/echo" || echo 0)
+
+            kill -TERM "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+
+            local rc=0
+            [ "$s1" = "200" ] || rc=1
+            [ "$s2" = "403" ] || rc=1
+            [ "$s3" = "403" ] || rc=1
+
+            printf '[%-8s] benign=%s sqli=%s xss=%s ' "$name" "$s1" "$s2" "$s3"
+            if [ "$rc" -eq 0 ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+              echo "::group::[$name] server log"
+              tail -n 200 "$log" || true
+              echo "::endgroup::"
+            fi
+            return "$rc"
+          }
+
+          # Track per-adapter outcomes so we can report all failures
+          # rather than aborting on the first.
+          declare -A RESULT
+
+          # ---- express ----
+          DIR="$ROOT/express"; mkdir -p "$DIR"
+          (
+            cd "$DIR"
+            cat > package.json <<'JSON'
+          {
+            "name": "consumer-express",
+            "version": "0.0.0",
+            "private": true,
+            "type": "module"
+          }
+          JSON
+            npm install --no-audit --no-fund \
+              "$CORE_TGZ" "$CRS_TGZ" "$EXPRESS_TGZ" \
+              'express@^4.21.0' >/dev/null
+            cat > server.mjs <<'JS'
+          import express from 'express'
+          import http from 'node:http'
+          import { createWAF } from '@coraza/core'
+          import { recommended } from '@coraza/coreruleset'
+          import { coraza } from '@coraza/express'
+
+          const port = Number(process.env.PORT ?? 3000)
+          const waf = await createWAF({ rules: recommended(), mode: 'block' })
+
+          const app = express()
+          app.use(express.json({ limit: '1mb' }))
+          app.use(coraza({ waf }))
+
+          app.get('/healthz', (_req, res) => res.status(200).type('text/plain').send('ok'))
+          app.get('/search', (req, res) => {
+            const q = typeof req.query.q === 'string' ? req.query.q : ''
+            res.status(200).json({ q, len: q.length })
+          })
+          app.post('/echo', (req, res) => res.status(200).json(req.body ?? {}))
+
+          const server = http.createServer(app)
+          server.listen(port, '127.0.0.1', () => process.stdout.write(`listening on :${port}\n`))
+          process.on('SIGTERM', () => server.close(() => process.exit(0)))
+          JS
+          )
+          if probe_http_adapter express "$DIR"; then RESULT[express]=PASS; else RESULT[express]=FAIL; fi
+
+          # ---- fastify ----
+          DIR="$ROOT/fastify"; mkdir -p "$DIR"
+          (
+            cd "$DIR"
+            cat > package.json <<'JSON'
+          {
+            "name": "consumer-fastify",
+            "version": "0.0.0",
+            "private": true,
+            "type": "module"
+          }
+          JSON
+            npm install --no-audit --no-fund \
+              "$CORE_TGZ" "$CRS_TGZ" "$FASTIFY_TGZ" \
+              'fastify@^5.0.0' >/dev/null
+            cat > server.mjs <<'JS'
+          import Fastify from 'fastify'
+          import { createWAF } from '@coraza/core'
+          import { recommended } from '@coraza/coreruleset'
+          import { coraza } from '@coraza/fastify'
+
+          const port = Number(process.env.PORT ?? 3000)
+          const waf = await createWAF({ rules: recommended(), mode: 'block' })
+
+          const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 })
+          await app.register(coraza, { waf })
+
+          app.get('/healthz', async (_req, reply) => { reply.type('text/plain'); return 'ok' })
+          app.get('/search', async (req) => {
+            const q = (req.query && typeof req.query.q === 'string') ? req.query.q : ''
+            return { q, len: q.length }
+          })
+          app.post('/echo', async (req) => req.body ?? {})
+
+          await app.listen({ port, host: '127.0.0.1' })
+          process.stdout.write(`listening on :${port}\n`)
+          process.on('SIGTERM', async () => { await app.close(); process.exit(0) })
+          JS
+          )
+          if probe_http_adapter fastify "$DIR"; then RESULT[fastify]=PASS; else RESULT[fastify]=FAIL; fi
+
+          # ---- nestjs ----
+          # NestJS controllers are decorator-driven, so the consumer
+          # entry has to be TypeScript-shaped. We use `tsx` (already a
+          # dev tool in this repo's matrix cases) to run the .ts source
+          # directly — this still exercises the published `@coraza/nestjs`
+          # tarball end-to-end through real HTTP.
+          DIR="$ROOT/nestjs"; mkdir -p "$DIR"
+          (
+            cd "$DIR"
+            cat > package.json <<'JSON'
+          {
+            "name": "consumer-nestjs",
+            "version": "0.0.0",
+            "private": true,
+            "type": "module"
+          }
+          JSON
+            cat > tsconfig.json <<'JSON'
+          {
+            "compilerOptions": {
+              "target": "ES2022",
+              "module": "ESNext",
+              "moduleResolution": "bundler",
+              "experimentalDecorators": true,
+              "emitDecoratorMetadata": true,
+              "esModuleInterop": true,
+              "skipLibCheck": true,
+              "strict": false
+            }
+          }
+          JSON
+            npm install --no-audit --no-fund \
+              "$CORE_TGZ" "$CRS_TGZ" "$NESTJS_TGZ" \
+              '@nestjs/common@^11.0.0' '@nestjs/core@^11.0.0' \
+              '@nestjs/platform-express@^11.0.0' \
+              'reflect-metadata@^0.2.2' 'rxjs@^7.8.1' \
+              'tsx@^4.19.0' 'typescript@^5.6.0' >/dev/null
+            cat > server.ts <<'TS'
+          import 'reflect-metadata'
+          import { NestFactory } from '@nestjs/core'
+          import { Body, Controller, Get, Header, Module, Post, Query } from '@nestjs/common'
+          import { createWAF } from '@coraza/core'
+          import { recommended } from '@coraza/coreruleset'
+          import { CorazaModule } from '@coraza/nestjs'
+
+          const port = Number(process.env.PORT ?? 3000)
+          const waf = await createWAF({ rules: recommended(), mode: 'block' })
+
+          @Controller()
+          class AppController {
+            @Get('/healthz') @Header('content-type', 'text/plain') h(): string { return 'ok' }
+            @Get('/search') s(@Query('q') q?: string) {
+              const v = q ?? ''
+              return { q: v, len: v.length }
+            }
+            @Post('/echo') e(@Body() body: unknown) { return body ?? {} }
+          }
+
+          @Module({ imports: [CorazaModule.forRoot({ waf })], controllers: [AppController] })
+          class AppModule {}
+
+          const app = await NestFactory.create(AppModule, { logger: ['error', 'warn'], rawBody: true })
+          await app.listen(port, '127.0.0.1')
+          process.stdout.write(`listening on :${port}\n`)
+          process.on('SIGTERM', async () => { await app.close(); process.exit(0) })
+          TS
+          )
+          # Override the launcher: nestjs runs server.ts via tsx instead
+          # of node server.mjs. We re-implement the http probe inline
+          # here because the rest of probe_http_adapter (port wait,
+          # 3-scenario curl, log dump) is identical.
+          NPORT="$(rand_port)"
+          NLOG="$ROOT/nestjs.log"
+          (cd "$DIR" && PORT="$NPORT" NODE_ENV=production node --import tsx server.ts > "$NLOG" 2>&1) &
+          NPID=$!
+          deadline=$(( $(date +%s) + 90 ))
+          ready=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if curl -fsS -o /dev/null "http://127.0.0.1:$NPORT/healthz" 2>/dev/null; then ready=1; break; fi
+            sleep 0.5
+          done
+          if [ -n "$ready" ]; then
+            n1=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$NPORT/search?q=hello" || echo 0)
+            n2=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$NPORT/search?q=%27%2BOR%2B1%3D1--" || echo 0)
+            n3=$(curl -s -o /dev/null -w '%{http_code}' \
+                 -X POST -H 'content-type: application/json' \
+                 --data '{"msg":"<script>alert(1)</script>"}' \
+                 "http://127.0.0.1:$NPORT/echo" || echo 0)
+            kill -TERM "$NPID" 2>/dev/null || true
+            wait "$NPID" 2>/dev/null || true
+            printf '[nestjs  ] benign=%s sqli=%s xss=%s ' "$n1" "$n2" "$n3"
+            if [ "$n1" = 200 ] && [ "$n2" = 403 ] && [ "$n3" = 403 ]; then
+              echo PASS; RESULT[nestjs]=PASS
+            else
+              echo FAIL; RESULT[nestjs]=FAIL
+              echo "::group::[nestjs] server log"
+              tail -n 200 "$NLOG" || true
+              echo "::endgroup::"
+            fi
+          else
+            kill -TERM "$NPID" 2>/dev/null || true
+            wait "$NPID" 2>/dev/null || true
+            echo '[nestjs  ] FAIL (boot timeout)'
+            RESULT[nestjs]=FAIL
+            echo "::group::[nestjs] server log (boot timeout)"
+            tail -n 200 "$NLOG" || true
+            echo "::endgroup::"
+          fi
+
+          # ---- next (proxy.ts shape, synthetic invocation) ----
+          # Booting a real Next dev/prod server in the smoke runner
+          # would double the job runtime and add a Next-specific compile
+          # step. Instead we install @coraza/next + next from the tarball
+          # and invoke the published `coraza({ waf })` middleware function
+          # directly with synthesized NextRequest objects — that proves:
+          #
+          #   1. `@coraza/next` resolves from the tarball,
+          #   2. its `exports` map points at a file that's actually
+          #      shipped,
+          #   3. `next/server`'s NextRequest interop works (next has no
+          #      `exports` map and a plain `import 'next/server'` only
+          #      resolves under Next's own bundler — we use createRequire
+          #      so Node's CJS resolver finds it like a real consumer's
+          #      bundler would), and
+          #   4. the middleware blocks/allows the same 3 scenarios.
+          DIR="$ROOT/next"; mkdir -p "$DIR"
+          (
+            cd "$DIR"
+            cat > package.json <<'JSON'
+          {
+            "name": "consumer-next",
+            "version": "0.0.0",
+            "private": true,
+            "type": "module"
+          }
+          JSON
+            npm install --no-audit --no-fund \
+              "$CORE_TGZ" "$CRS_TGZ" "$NEXT_TGZ" \
+              'next@^16.0.0' 'react@^19.0.0' 'react-dom@^19.0.0' >/dev/null
+            cat > probe.mjs <<'JS'
+          // Synthetic Next 16 proxy.ts smoke. Uses createRequire so the
+          // CJS subpath resolver finds `next/server` (Next 16's package.json
+          // has no `exports` map; pure-ESM `import 'next/server'` only works
+          // when a downstream bundler — webpack/turbopack — resolves it.
+          // Real Next consumers always have such a bundler; this smoke does
+          // not, so we route through createRequire which models the same
+          // resolution behavior).
+          import { createRequire } from 'node:module'
+          const require = createRequire(import.meta.url)
+          const { createWAF } = require('@coraza/core')
+          const { recommended } = require('@coraza/coreruleset')
+          const { coraza } = require('@coraza/next')
+          const { NextRequest } = require('next/server')
+
+          const waf = await createWAF({ rules: recommended(), mode: 'block' })
+          const proxy = coraza({ waf })
+
+          // CRS expects a baseline of standard headers; without them an
+          // anomaly score accumulates and even GET /healthz blocks. curl
+          // sends these by default, so the http-adapter probes never
+          // hit the issue. The synthetic NextRequest has to set them.
+          const HEADERS = {
+            'user-agent': 'tarball-smoke/1.0',
+            accept: '*/*',
+            host: '127.0.0.1',
+          }
+          function reqOf(url, init = {}) {
+            const headers = { ...HEADERS, ...(init.headers || {}) }
+            return new NextRequest(new URL(url, 'http://127.0.0.1'), { ...init, headers })
+          }
+
+          const benign = await proxy(reqOf('/search?q=hello'))
+          const sqli   = await proxy(reqOf('/search?q=%27%2BOR%2B1%3D1--'))
+          const xss    = await proxy(reqOf('/echo', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ msg: '<script>alert(1)</script>' }),
+          }))
+
+          // `coraza({waf})` returns NextResponse on allow (no body) and a
+          // Response with status:403 on block. Treat any non-4xx as benign.
+          const benignStatus = benign.status >= 400 ? benign.status : 200
+          const sqliStatus   = sqli.status
+          const xssStatus    = xss.status
+
+          process.stdout.write(`benign=${benignStatus} sqli=${sqliStatus} xss=${xssStatus}\n`)
+          const ok = benignStatus === 200 && sqliStatus === 403 && xssStatus === 403
+          if (!ok) {
+            process.stderr.write('next-proxy: scenario mismatch\n')
+            process.exit(1)
+          }
+          JS
+          )
+          if (cd "$DIR" && node probe.mjs); then
+            RESULT[next]=PASS
+            echo '[next    ] PASS'
+          else
+            RESULT[next]=FAIL
+            echo '[next    ] FAIL'
+          fi
+
+          echo
+          echo '=== adapter results ==='
+          fail=0
+          for k in express fastify nestjs next; do
+            v="${RESULT[$k]:-MISSING}"
+            printf '  %-8s %s\n' "$k" "$v"
+            [ "$v" = PASS ] || fail=1
+          done
+          exit "$fail"
+
+      - name: Upload tarballs (debuggability)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tarballs-node${{ matrix.node }}
+          path: ${{ steps.pack.outputs.out }}
+          retention-days: 7
+          if-no-files-found: warn
