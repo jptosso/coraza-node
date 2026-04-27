@@ -347,4 +347,26 @@ describe('CorazaGuard', () => {
       guard.canActivate(ctx({ method: 'GET', url: '/img/logo.png', headers: {}, socket: {} })),
     ).rejects.toThrow()
   })
+
+  // Issue #23 — block log loses signal. Default block line MUST include
+  // `interruption.data` (free) and verboseLog: true MUST surface every
+  // matching rule and pass them to onBlock(ctx).
+  it('issue #23: passes matchedRules to onBlock when verboseLog is enabled', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        tx.matchedRules = [{ id: 942100, severity: 2, message: 'SQLi' }]
+        return { ruleId: 949110, action: 'deny', status: 403, data: 'anomaly' }
+      },
+    })
+    let received: unknown = 'unset'
+    const onBlock = (i: { ruleId: number }, c?: { matchedRules: unknown }): HttpException => {
+      received = c
+      return new HttpException(`blocked ${i.ruleId}`, 403)
+    }
+    const guard = new CorazaGuard(waf, { verboseLog: true, onBlock })
+    await expect(
+      guard.canActivate(ctx({ method: 'GET', url: '/x', headers: {}, socket: {} })),
+    ).rejects.toThrow(HttpException)
+    expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
+  })
 })

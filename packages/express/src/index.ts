@@ -22,6 +22,7 @@ import type {
   Transaction,
   Interruption,
   Logger,
+  MatchedRule,
   RequestInfo,
   SkipOptions,
   IgnoreSpec,
@@ -44,8 +45,17 @@ export interface CorazaExpressOptions {
   /**
    * Override how a block decision is turned into an HTTP response.
    * Default: sets status + plain-text body with the interruption's rule id.
+   *
+   * The optional `ctx.matchedRules` lists every rule that matched in the
+   * transaction (only populated when `verboseLog: true`, otherwise
+   * `undefined` to avoid the WASM round-trip on every block).
    */
-  onBlock?: (interruption: Interruption, req: Request, res: Response) => void
+  onBlock?: (
+    interruption: Interruption,
+    req: Request,
+    res: Response,
+    ctx?: CorazaBlockContext,
+  ) => void
   /**
    * Inspect the response phase (headers + body) in addition to the request.
    * Default: `false`. Response inspection doubles per-request work; enable
@@ -81,6 +91,22 @@ export interface CorazaExpressOptions {
    *             Matches what a dedicated WAF sidecar would do.
    */
   onWAFError?: 'allow' | 'block'
+  /**
+   * When `true`, emit one `log.warn('coraza: matched', { ... })` per
+   * matched rule on a block (ModSecurity error.log style). Adds an
+   * extra `tx.matchedRules()` read on the block path; default `false`.
+   * The default block log always includes `interruption.data`.
+   */
+  verboseLog?: boolean
+}
+
+/**
+ * Optional context handed to `onBlock` as a fourth argument. Only
+ * populated when `verboseLog: true` (the runner pre-fetches matched
+ * rules for the verbose log path and re-uses them here).
+ */
+export interface CorazaBlockContext {
+  matchedRules: MatchedRule[]
 }
 
 type ReqWithLog = Request & { log?: Logger }
@@ -93,6 +119,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     onBlock = defaultBlock,
     inspectResponse = false,
     onWAFError = 'block',
+    verboseLog = false,
   } = options
   const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
@@ -187,7 +214,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
       const bodyBuf = verdict === 'skip-body' ? undefined : extractBody(req)
       const interrupted = await tx.processRequestBundle(reqInfo, bodyBuf)
       if (interrupted) {
-        return emitBlock(await tx.interruption(), req, res, onBlock, log)
+        return emitBlock(await tx.interruption(), req, res, onBlock, log, tx, verboseLog)
       }
 
       if (inspectResponse) {
@@ -195,7 +222,17 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
         // only work with the sync `WAF` path — a pool's async methods can't
         // block mid-write. Skip quietly under pools; log once so users know.
         if (isSyncTx(tx)) {
-          hookResponse(tx, res, (it) => emitBlock(it, req, res, onBlock, log), log)
+          hookResponse(
+            tx,
+            res,
+            (it) => {
+              // Sync-only path; emit synchronously so we don't return a
+              // Promise from res.writeHead/res.end.
+              const mr = verboseLog ? tx.matchedRules() : undefined
+              if (it) emitBlockSync(it, req, res, onBlock, log, mr)
+            },
+            log,
+          )
         } else {
           log.warn(
             'coraza: inspectResponse=true is a no-op when using WAFPool; use a single WAF or drop response inspection',
@@ -300,21 +337,49 @@ export function defaultBlock(interruption: Interruption, _req: Request, res: Res
     .send(`Request blocked by Coraza (rule ${interruption.ruleId})\n`)
 }
 
-function emitBlock(
+async function emitBlock(
   interruption: Interruption | null,
   req: Request,
   res: Response,
   onBlock: NonNullable<CorazaExpressOptions['onBlock']>,
   log: Logger,
-): void {
+  tx: AnyTransaction,
+  verboseLog: boolean,
+): Promise<void> {
   /* c8 ignore next — defensive: tx_has_interrupt=1 but get_interrupt=null is a bug */
   if (!interruption) return
+  const matched = verboseLog ? await tx.matchedRules() : undefined
+  emitBlockSync(interruption, req, res, onBlock, log, matched)
+}
+
+function emitBlockSync(
+  interruption: Interruption,
+  req: Request,
+  res: Response,
+  onBlock: NonNullable<CorazaExpressOptions['onBlock']>,
+  log: Logger,
+  matched: MatchedRule[] | undefined,
+): void {
   log.warn('coraza: request blocked', {
     ruleId: interruption.ruleId,
     status: interruption.status,
     action: interruption.action,
+    ...(interruption.data ? { data: interruption.data } : {}),
   })
-  onBlock(interruption, req, res)
+  if (matched) {
+    for (const r of matched) {
+      log.warn('coraza: matched', {
+        ruleId: r.id,
+        severity: r.severity,
+        msg: r.message,
+      })
+    }
+    onBlock(interruption, req, res, { matchedRules: matched })
+  } else {
+    // Don't pass `undefined` as a 4th arg — keeps toHaveBeenCalledWith(it, req, res)
+    // assertions in pre-existing consumer tests stable.
+    onBlock(interruption, req, res)
+  }
 }
 
 function headersOf(

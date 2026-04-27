@@ -495,4 +495,39 @@ describe('@coraza/fastify', () => {
     expect((await app.inject({ method: 'GET', url: '/img/logo.png' })).statusCode).toBe(403)
     await app.close()
   })
+
+  // Issue #23 — block log loses signal. The default block log line MUST
+  // include `interruption.data` and verboseLog: true MUST emit one line
+  // per matched rule (so a CRS 949110 anomaly-score block reveals the
+  // contributing 941100/942100 hits, not just the threshold rule).
+  it('issue #23: default block log includes interruption.data and verboseLog emits matched rules', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        tx.matchedRules = [
+          { id: 942100, severity: 2, message: 'SQL Injection (libinjection)' },
+          { id: 941100, severity: 2, message: 'XSS reflected' },
+        ]
+        return {
+          ruleId: 949110,
+          action: 'deny',
+          status: 403,
+          data: 'Inbound Anomaly Score Exceeded (Total Score: 10)',
+        }
+      },
+    })
+    const warn = vi.fn()
+    const app = Fastify({ logger: false })
+    // Inject a stub logger on every request so we can capture warn lines.
+    app.addHook('onRequest', async (req) => {
+      ;(req as unknown as { log: { warn: typeof warn } }).log = { warn }
+    })
+    await app.register(coraza, { waf, verboseLog: true })
+    app.get('/x', async () => 'ok')
+    await app.inject({ method: 'GET', url: '/x' })
+    const calls = warn.mock.calls.map((c) => String(c[0]))
+    expect(calls.some((s) => s.includes('request blocked') && s.includes('Inbound Anomaly Score'))).toBe(true)
+    expect(calls.some((s) => s.includes('942100') && s.includes('SQL Injection'))).toBe(true)
+    expect(calls.some((s) => s.includes('941100'))).toBe(true)
+    await app.close()
+  })
 })

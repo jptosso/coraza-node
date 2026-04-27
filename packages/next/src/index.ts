@@ -26,6 +26,7 @@ import type {
   AnyWAF,
   WAFLike,
   Interruption,
+  MatchedRule,
   SkipOptions,
   IgnoreSpec,
   IgnoreContext,
@@ -34,6 +35,19 @@ import type {
 import { buildIgnoreMatcher, skipToIgnore } from '@coraza/core'
 import { NextResponse, type NextRequest } from 'next/server'
 
+/**
+ * Extra context passed as the third argument to `onBlock`. Optional —
+ * legacy `(interruption, req) => Response` handlers still type-check.
+ * Use this to log contributing CRS rules: the `Interruption` itself
+ * only carries the terminating rule, which for CRS is almost always
+ * 949110 (the inbound anomaly score threshold) and that one rule by
+ * itself doesn't tell you what tripped.
+ */
+export interface CorazaBlockContext {
+  /** Every rule that matched in this transaction, in evaluation order. */
+  matchedRules: MatchedRule[]
+}
+
 export interface CorazaNextOptions {
   /**
    * A built WAF or WAFPool. A promise is also accepted so `middleware.ts`
@@ -41,7 +55,11 @@ export interface CorazaNextOptions {
    * construction.
    */
   waf: WAFLike
-  onBlock?: (interruption: Interruption, req: NextRequest) => Response
+  onBlock?: (
+    interruption: Interruption,
+    req: NextRequest,
+    ctx?: CorazaBlockContext,
+  ) => Response
   // No `inspectResponse` on this adapter by design — Next's middleware
   // runs on the request boundary and cannot read the Route Handler's
   // response body. CRS's RESPONSE-* families therefore can't fire on a
@@ -84,6 +102,16 @@ export interface CorazaNextOptions {
    * @default true
    */
   inspectBody?: boolean
+  /**
+   * When `true`, emit one `log.warn('coraza: matched', { ... })` line per
+   * matched rule on a block (ModSecurity error.log style). The default
+   * block log already includes `interruption.data`; this option additionally
+   * surfaces every contributing rule so a 949110 anomaly-score block tells
+   * you which underlying rules pushed the score over the threshold.
+   *
+   * Costs one extra `tx.matchedRules()` round-trip per block; default `false`.
+   */
+  verboseLog?: boolean
 }
 
 /**
@@ -129,6 +157,7 @@ export function createCorazaRunner(
     onBlock = defaultBlock,
     onWAFError = 'block',
     inspectBody = true,
+    verboseLog = false,
   } = options
   const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
@@ -190,12 +219,36 @@ export function createCorazaRunner(
       if (interrupted) {
         const interruption = await tx.interruption()
         if (!interruption) return { allow: true }
+        // The WASM has already populated `interruption.data` ("Inbound
+        // Anomaly Score Exceeded (Total Score: N)" for CRS 949110) so
+        // including it in the default log is free. `tx.matchedRules()`
+        // costs an extra read from WASM memory; only pay it when the
+        // consumer opted in via `verboseLog`, or when their `onBlock`
+        // declared a third (`ctx`) parameter.
+        const wantsCtx = onBlock.length >= 3
+        const matchedRules =
+          verboseLog || wantsCtx ? await tx.matchedRules() : undefined
         log.warn('coraza: request blocked', {
           ruleId: interruption.ruleId,
           status: interruption.status,
           action: interruption.action,
+          ...(interruption.data ? { data: interruption.data } : {}),
         })
-        return { blocked: onBlock(interruption, req) }
+        if (verboseLog && matchedRules) {
+          for (const r of matchedRules) {
+            log.warn('coraza: matched', {
+              ruleId: r.id,
+              severity: r.severity,
+              msg: r.message,
+            })
+          }
+        }
+        // Only pass the 3rd arg when populated, so `toHaveBeenCalledWith(it, req)`
+        // assertions in consumer tests don't see a stray `undefined` ctx.
+        const blocked = matchedRules
+          ? onBlock(interruption, req, { matchedRules })
+          : onBlock(interruption, req)
+        return { blocked }
       }
 
       return { allow: true }

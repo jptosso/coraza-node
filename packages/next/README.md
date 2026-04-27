@@ -130,6 +130,39 @@ The legacy `skip:` option is deprecated and mapped to `ignore:` at
 construction (one-shot warning per process). It will be removed at
 stable 0.1.
 
+### Block-log signal: `interruption.data` and verbose matched rules
+
+The default block log line includes `interruption.data` — for CRS this
+is the human-readable reason string (e.g. `Inbound Anomaly Score
+Exceeded (Total Score: 10)`). The terminating rule is almost always
+`949110` (the inbound anomaly threshold), so without this you'd be
+debugging "rule 949110 fired" with no idea which rules contributed.
+
+When you need the contributing rules too, opt in to `verboseLog`:
+
+```ts
+export const proxy = coraza({ waf, verboseLog: true })
+```
+
+That emits one extra `log.warn('coraza: matched', { ruleId, severity, msg })`
+per matched rule (ModSecurity error.log style). The matched-rules array
+is also passed as the optional third argument to a custom `onBlock`:
+
+```ts
+coraza({
+  waf,
+  verboseLog: true,
+  onBlock: (interruption, req, ctx) => {
+    metrics.increment('waf.block', { rule: interruption.ruleId })
+    for (const r of ctx?.matchedRules ?? []) audit.log(r)
+    return new Response('blocked', { status: 403 })
+  },
+})
+```
+
+`verboseLog` adds one `tx.matchedRules()` round-trip per blocked
+request; default is `false`.
+
 ### Body handling
 
 The runner reads the request body via `req.arrayBuffer()` before
