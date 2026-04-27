@@ -156,9 +156,109 @@ function filesToSkip(
   return skip
 }
 
+// Maps each id `recommended()` itself emits to a short human-readable label
+// describing what it controls. Used to generate actionable error messages
+// when a user-supplied `extra` block reuses one of these ids.
+type EmittedDirective = { id: number; description: string }
+
+function emittedDirectives(opts: {
+  anomalyBlock: boolean
+}): EmittedDirective[] {
+  const list: EmittedDirective[] = [
+    { id: 900000, description: 'sets tx.blocking_paranoia_level' },
+    { id: 900001, description: 'sets tx.inbound_anomaly_score_threshold' },
+    { id: 900002, description: 'sets tx.outbound_anomaly_score_threshold' },
+  ]
+  if (!opts.anomalyBlock) {
+    list.push({ id: 900003, description: 'sets tx.early_blocking=0' })
+  }
+  return list
+}
+
+// Suggest the option a user should reach for instead of overriding via `extra`.
+const ID_TO_OPTION_HINT: Record<number, string> = {
+  900000: 'override the paranoia level via the `paranoia` option',
+  900001:
+    'override the threshold via the `inboundAnomalyScoreThreshold` option',
+  900002:
+    'override the threshold via the `outboundAnomalyScoreThreshold` option',
+  900003: 'toggle early blocking via the `anomalyBlock` option',
+}
+
+// Match `id:NNNN` tokens in SecLang. Tolerates whitespace around the colon
+// and requires a non-digit (or end of string) immediately after the digits
+// so `id:9000010` is NOT mis-parsed as `900001`. The leading lookbehind-ish
+// is replaced by an explicit non-digit / start-of-string check, since
+// JS lookbehind support is uneven across runtimes we support.
+const ID_TOKEN_RE = /(^|[^0-9A-Za-z_])id\s*:\s*(\d+)(?![0-9])/g
+
+/** Internal: extract every rule id referenced by an `extra` SecLang blob. */
+function extractRuleIds(extra: string): number[] {
+  const ids: number[] = []
+  let match: RegExpExecArray | null
+  ID_TOKEN_RE.lastIndex = 0
+  while ((match = ID_TOKEN_RE.exec(extra)) !== null) {
+    ids.push(Number.parseInt(match[2], 10))
+  }
+  return ids
+}
+
+/**
+ * Validate that no rule id in `extra` collides with the ids `recommended()`
+ * itself emits, and warn about ids in the CRS-reserved range. Throws on
+ * direct collisions. Exported (un-prefixed name) only for tests.
+ */
+function validateExtraIds(
+  extra: string,
+  emitted: EmittedDirective[],
+): void {
+  if (!extra || extra.trim().length === 0) return
+  const ids = extractRuleIds(extra)
+  if (ids.length === 0) return
+
+  const emittedById = new Map<number, EmittedDirective>(
+    emitted.map((d) => [d.id, d]),
+  )
+  for (const id of ids) {
+    const hit = emittedById.get(id)
+    if (hit) {
+      const hint = ID_TO_OPTION_HINT[id]
+      const tail = hint
+        ? `Pick an id >= 1,000,000 or ${hint}.`
+        : 'Pick an id >= 1,000,000.'
+      throw new Error(
+        `rule id ${id} in \`extra\` collides with the recommended() preset (it ${hit.description}). ${tail}`,
+      )
+    }
+  }
+
+  // CRS reserves 900000–999999. Ids outside the emitted set are not a hard
+  // collision today, but a user choosing one risks colliding on a future
+  // CRS upgrade. Warn but don't throw — see issue #30.
+  const warned = new Set<number>()
+  for (const id of ids) {
+    if (id < 900000 || id > 999999) continue
+    if (emittedById.has(id)) continue
+    if (warned.has(id)) continue
+    warned.add(id)
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[@coraza/coreruleset] rule id ${id} in \`extra\` is inside the CRS-reserved range (900000-999999). It does not currently collide with recommended(), but a future CRS upgrade may claim this id. Prefer ids >= 1,000,000 for user rules. See https://github.com/coraza-incubator/coraza-node/issues/30`,
+    )
+  }
+}
+
 /**
  * Build SecLang configuration that activates CRS with sensible defaults for
  * a Node.js application. Pass the return value as `rules` to `createWAF`.
+ *
+ * If `extra` is provided, its `id:N` tokens are validated against the ids
+ * `recommended()` itself emits (900000–900003 depending on options). A
+ * direct collision throws at config-build time with an actionable message.
+ * Ids inside the CRS-reserved range 900000–999999 that are not emitted by
+ * recommended() trigger a `console.warn` but are allowed (some advanced
+ * users override CRS rules deliberately). User rules belong at id >=
+ * 1,000,000.
  */
 export function recommended(options: CrsOptions = {}): string {
   const paranoia = options.paranoia ?? 1
@@ -168,6 +268,11 @@ export function recommended(options: CrsOptions = {}): string {
   const outbound = options.outboundAnomalyThreshold ?? 4
   const anomalyBlock = options.anomalyBlock ?? true
   const extra = options.extra ?? ''
+
+  // Validate before we build anything: a bad `extra` should fail loudly at
+  // config time, not silently produce an invalid SecLang blob.
+  const emitted = emittedDirectives({ anomalyBlock })
+  validateExtraIds(extra, emitted)
 
   const parts: string[] = []
   parts.push('Include @coraza.conf-recommended')
@@ -205,6 +310,9 @@ export function recommended(options: CrsOptions = {}): string {
   }
   return parts.join('\n') + '\n'
 }
+
+/** @internal — exposed only for tests. */
+export const __test = { extractRuleIds, validateExtraIds, emittedDirectives }
 
 /** Return a SecRuleRemoveById directive for a single category. Low-level. */
 export function excludeCategory(cat: CrsCategory): string {
