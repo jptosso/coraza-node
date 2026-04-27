@@ -102,4 +102,27 @@ describe('CorazaModule', () => {
     ) as { inject?: unknown[] } | undefined
     expect(optsProvider?.inject).toEqual(['MY_DEP'])
   })
+
+  // Issue #25 — top-level createWAF rejection is silent. The Nest
+  // provider factory MUST fire `onWAFInit` once with the original
+  // Error before re-throwing, so external healthcheck / logger code
+  // can capture the boot-time stack.
+  it('issue #25: createWAF rejection fires onWAFInit and re-throws', async () => {
+    const original = new Error('WASM compile failed: ABI version mismatch')
+    mockCreateWAF.mockRejectedValueOnce(original)
+    const onWAFInit = vi.fn()
+    const { CorazaModule } = await import('../src/coraza.module.js')
+    const { CORAZA_WAF } = await import('../src/tokens.js')
+    const dyn = CorazaModule.forRoot({ rules: '', onWAFInit })
+    const wafProvider = (dyn.providers ?? []).find(
+      (p) =>
+        'provide' in (p as Record<string, unknown>) &&
+        (p as { provide: unknown }).provide === CORAZA_WAF,
+    ) as { useFactory: (opts: unknown) => Promise<unknown> }
+    await expect(
+      wafProvider.useFactory({ rules: '', onWAFInit }),
+    ).rejects.toThrow('WASM compile failed: ABI version mismatch')
+    expect(onWAFInit).toHaveBeenCalledTimes(1)
+    expect(onWAFInit).toHaveBeenCalledWith(original)
+  })
 })

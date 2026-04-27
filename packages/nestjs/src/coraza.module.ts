@@ -66,6 +66,13 @@ interface CorazaNestCommonOptions {
    * includes `interruption.data`.
    */
   verboseLog?: boolean
+  /**
+   * Fires once when WAF construction (createWAF / promise) rejects.
+   * The rejection still propagates out of the Nest provider factory
+   * so app boot fails loudly; this hook lets you snapshot the error
+   * first (healthchecks, external logger, etc.).
+   */
+  onWAFInit?: (err: Error) => void
 }
 
 interface CorazaNestBuiltOptions {
@@ -133,8 +140,22 @@ function wafProvider(): Provider {
     provide: CORAZA_WAF,
     inject: [CORAZA_OPTIONS],
     useFactory: async (opts: CorazaNestOptions): Promise<AnyWAF> => {
-      if (hasBuiltWAF(opts)) return opts.waf
-      return createWAF(opts as WAFConfig)
+      try {
+        if (hasBuiltWAF(opts)) return await Promise.resolve(opts.waf)
+        return await createWAF(opts as WAFConfig)
+      } catch (err) {
+        const e = err instanceof Error ? err : new Error(String(err))
+        // Surface the boot error via `onWAFInit` first (so healthcheck /
+        // external logger code can capture it) before re-throwing —
+        // otherwise the only signal is Nest's generic "DI factory
+        // failed" error and the WASM-init stack is buried.
+        try {
+          opts.onWAFInit?.(e)
+        } catch {
+          // never let onWAFInit's own throw mask the original cause.
+        }
+        throw e
+      }
     },
   }
 }
