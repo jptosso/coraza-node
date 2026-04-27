@@ -1,7 +1,7 @@
 {
   "name": "@coraza/core",
   "version": "0.1.0-preview.1",
-  "description": "Experimental community packaging of OWASP Coraza WAF for Node.js — core engine (WASM loader). Not an official Coraza/OWASP release.",
+  "description": "Experimental community packaging of OWASP Coraza WAF for Node.js \u2014 core engine (WASM loader). Not an official Coraza/OWASP release.",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",
   "homepage": "https://github.com/coraza-incubator/coraza-node",
@@ -44,7 +44,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && find dist -name \"*.d.cts\" -delete && find dist -name \"*.d.cts.map\" -delete",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
