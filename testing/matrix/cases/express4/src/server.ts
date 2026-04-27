@@ -1,4 +1,4 @@
-import express from 'express'
+import express, { type RequestHandler } from 'express'
 import http from 'node:http'
 import { createWAF, createWAFPool } from '@coraza/core'
 import { recommended } from '@coraza/coreruleset'
@@ -15,7 +15,9 @@ const waf = usePool
 
 const app = express()
 app.use(express.json({ limit: '1mb' }))
-app.use(coraza({ waf }))
+// Cross-major express types: @coraza/express ships express@5 RequestHandler
+// types; this case pins express@4. Runtime is identical, types differ.
+app.use(coraza({ waf }) as unknown as RequestHandler)
 
 app.get('/healthz', (_req, res) => {
   res.status(200).type('text/plain').send('ok')

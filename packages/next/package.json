@@ -52,12 +52,12 @@
   "devDependencies": {
     "@coraza/core": "workspace:*",
     "@playwright/test": "^1.48.0",
-    "@types/node": "^22.7.5",
-    "@vitest/coverage-v8": "^2.1.2",
+    "@types/node": "^25.0.0",
+    "@vitest/coverage-v8": "^4.1.0",
     "next": "^16.0.0",
     "tsup": "^8.3.0",
-    "typescript": "^5.6.2",
-    "vitest": "^2.1.2"
+    "typescript": "^6.0.0",
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "@coraza/core": "workspace:*"
