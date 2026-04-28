@@ -6,9 +6,8 @@ import os from 'node:os'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import multer from 'multer'
-import { WebSocketServer } from 'ws'
 import { createWAF, createWAFPool } from '@coraza/core'
-import type { AnyWAF, RequestInfo } from '@coraza/core'
+import type { AnyWAF } from '@coraza/core'
 import { recommended } from '@coraza/coreruleset'
 import { coraza } from '@coraza/express'
 import { ftwEcho, ftwModeEnabled, handlers } from '@coraza/example-shared'
@@ -46,7 +45,6 @@ if (ftw) app.use(express.raw({ type: '*/*', limit: '10mb' }))
 // (multer is mounted only on the /upload route below).
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })
 
-let wafForUpgrade: AnyWAF | null = null
 if (!wafDisabled) {
   // CRS's `crs-setup.conf.example` ships rules 900200/900220 commented out
   // by default, so `tx.allowed_request_content_type` is empty and rule
@@ -70,7 +68,6 @@ if (!wafDisabled) {
   const waf = usePool
     ? await createWAFPool({ rules, mode, size: poolSize })
     : await createWAF({ rules, mode })
-  wafForUpgrade = waf
   app.use(coraza({ waf, inspectResponse: ftw }))
   console.log(
     `express :${port} waf=on mode=${mode} ${usePool ? `POOL size=${poolSize}` : 'single'}${ftw ? ' FTW=1 paranoia=2' : ''}`,
@@ -202,97 +199,6 @@ if (ftw) {
 // with the args passed and is harder to reason about when debugging.
 process.stderr.write(`[${new Date().toISOString()}] express calling listen()\n`)
 const server = http.createServer(app)
-
-// WebSocket /ws/echo. The HTTP upgrade request must flow through Coraza so
-// a malicious URL (e.g. SQLi in the query string) is blocked before the
-// upgrade is acknowledged. Express's normal middleware chain only runs on
-// `request` events; `upgrade` events bypass it entirely. We intercept the
-// upgrade at the http.Server level, run the request bundle through the WAF
-// synchronously (request-only — no response phase, no body), and either
-// hand off to the WS server or write a 403 + destroy the socket.
-const wss = new WebSocketServer({ noServer: true })
-wss.on('connection', (sock) => {
-  sock.on('message', (data) => {
-    try {
-      sock.send(`[srv] ${data.toString()}`)
-    } catch {
-      // socket may be closing; ignore
-    }
-  })
-})
-
-async function inspectUpgrade(
-  waf: AnyWAF,
-  req: http.IncomingMessage,
-  url: string,
-  socket: import('node:stream').Duplex,
-): Promise<boolean> {
-  let tx: Awaited<ReturnType<AnyWAF['newTransaction']>>
-  try {
-    tx = await waf.newTransaction()
-  } catch (err) {
-    process.stderr.write(`ws upgrade newTransaction error: ${(err as Error).message}\n`)
-    socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
-    socket.destroy()
-    return true
-  }
-  try {
-    if (await tx.isRuleEngineOff()) return false
-    const headers: [string, string][] = []
-    for (const [k, v] of Object.entries(req.headers)) {
-      if (Array.isArray(v)) for (const item of v) headers.push([k, item])
-      else if (v !== undefined) headers.push([k, v])
-    }
-    const info: RequestInfo = {
-      method: req.method ?? 'GET',
-      url,
-      protocol: `HTTP/${req.httpVersion}`,
-      headers,
-      remoteAddr: req.socket.remoteAddress ?? '',
-      remotePort: req.socket.remotePort ?? 0,
-      serverPort: req.socket.localPort ?? 0,
-    }
-    const interrupted = await tx.processRequestBundle(info, undefined)
-    if (interrupted) {
-      const it = await tx.interruption()
-      const status = it?.status || 403
-      socket.write(
-        `HTTP/1.1 ${status} Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
-      )
-      socket.destroy()
-      return true
-    }
-    return false
-  } catch (err) {
-    // Fail-closed on WAF errors during the upgrade — reject the handshake
-    // rather than allow an un-inspected WS session.
-    process.stderr.write(`ws upgrade waf error: ${(err as Error).message}\n`)
-    socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
-    socket.destroy()
-    return true
-  } finally {
-    void Promise.resolve(tx.processLogging())
-      .catch(() => {})
-      .finally(() => tx.close())
-  }
-}
-
-if (!ftw) {
-  server.on('upgrade', async (req, socket, head) => {
-    const url = req.url ?? '/'
-    if (!url.startsWith('/ws/echo')) {
-      socket.destroy()
-      return
-    }
-    if (wafForUpgrade) {
-      const blocked = await inspectUpgrade(wafForUpgrade, req, url, socket)
-      if (blocked) return
-    }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req)
-    })
-  })
-}
 
 server.listen(port, '0.0.0.0', () => {
   const addr = server.address()

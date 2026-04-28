@@ -199,55 +199,6 @@ async function main() {
   r = await get('/download/../../etc/passwd')
   log_line('download-traversal', r.status)
 
-  // websocket
-  const { default: WebSocket } = await import('ws')
-  await new Promise((resolve) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/echo`)
-    let echoed = false
-    ws.on('open', () => ws.send('hi'))
-    ws.on('message', (m) => {
-      if (m.toString().startsWith('[srv] ')) echoed = true
-      ws.close()
-    })
-    ws.on('close', () => {
-      log_line('ws-benign', echoed ? 'echoed' : 'no-echo')
-      resolve()
-    })
-    ws.on('error', () => {
-      log_line('ws-benign', 'error')
-      resolve()
-    })
-  })
-  await new Promise((resolve) => {
-    let logged = false
-    const finish = (val) => {
-      if (logged) return
-      logged = true
-      log_line('ws-sqli', val)
-      resolve()
-    }
-    const ws = new WebSocket(
-      `ws://127.0.0.1:${PORT}/ws/echo?q=${encodeURIComponent("' OR 1=1--")}`,
-    )
-    let opened = false
-    let httpStatus = null
-    ws.on('open', () => {
-      opened = true
-      ws.close()
-    })
-    ws.on('unexpected-response', (_req, res) => {
-      httpStatus = res.statusCode
-      finish(httpStatus)
-    })
-    ws.on('error', () => {
-      /* expected — connection refused after 403; finish via close */
-    })
-    ws.on('close', () => {
-      finish(opened ? 'OPENED-UNEXPECTED' : (httpStatus ?? 'closed'))
-    })
-    setTimeout(() => finish('timeout'), 5000)
-  })
-
   child.kill('SIGTERM')
   await wait(300)
   console.log('---SUMMARY---')

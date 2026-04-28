@@ -2,7 +2,7 @@
 
 Demo Express 5 app wrapped by `@coraza/express` so a single Coraza WAF
 inspects every common HTTP payload shape: JSON, urlencoded, multipart,
-streamed file downloads, and the WebSocket upgrade handshake.
+and streamed file downloads.
 
 ## Run
 
@@ -24,7 +24,6 @@ WAF for a `WAFPool` of `POOL_SIZE` workers.
 | POST   | `/form`             | `application/x-www-form-urlencoded` (≤1MB) | Body echo                                          |
 | POST   | `/upload`           | `multipart/form-data` (multer, in-memory, ≤5MB per file) | Echoes field names + each file's name+byte length |
 | GET    | `/download/:name`   | -                          | Streams a fixture from `public/` with `Content-Disposition: attachment` |
-| WS     | `/ws/echo`          | text frames                | Upgrade GET is WAF-inspected; messages echoed with `[srv]` prefix |
 
 Plus the existing benchmark/FTW routes: `/`, `/healthz`, `/search`,
 `/img/logo.png`, `/api/users/:id`. A few small fixtures live under
@@ -73,10 +72,6 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   http://localhost:3001/download/test.txt
 curl -s -o /dev/null -w '%{http_code}\n' \
   --path-as-is http://localhost:3001/download/../../etc/passwd
-
-# websocket — install wscat first: `npm i -g wscat`
-wscat -c ws://localhost:3001/ws/echo
-wscat -c "ws://localhost:3001/ws/echo?q=' OR 1=1--"
 ```
 
 Use `--path-as-is` on curl so it doesn't normalize `..` segments out of
@@ -113,20 +108,3 @@ server. It honours `PORT` and `MODE` env vars and prints one
 PORT=3041 node -e 'process.env.REPO=process.cwd(); import("./examples/express-app/scripts/proof.mjs")'
 ```
 
-## WebSocket upgrade inspection
-
-The WebSocket upgrade is intercepted at the `http.Server` `upgrade`
-event (Express's middleware chain doesn't run on `upgrade` — only on
-`request`). The handler runs the upgrade GET through Coraza's request
-phase and either:
-
-- responds with `HTTP/1.1 403 Forbidden\r\n` + closes the socket if
-  CRS interrupts, or
-- hands the socket to `ws.WebSocketServer.handleUpgrade()` to complete
-  the handshake.
-
-Frame-level inspection (text frames after the upgrade) is intentionally
-**not** wired through Coraza here — the WAF's `processRequestBundle`
-contract is per-HTTP-request, not per-WebSocket-frame, and exposing it
-that way would imply guarantees we can't honour today. Frame contents
-are echoed verbatim with a `[srv]` prefix.
