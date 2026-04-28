@@ -1,6 +1,6 @@
 {
   "name": "@coraza/core",
-  "version": "0.1.0-preview.2",
+  "version": "0.1.0-preview.3",
   "description": "Experimental community packaging of OWASP Coraza WAF for Node.js — core engine (WASM loader). Not an official Coraza/OWASP release.",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",

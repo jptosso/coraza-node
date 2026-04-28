@@ -1,6 +1,6 @@
 {
   "name": "@coraza/next",
-  "version": "0.1.0-preview.2",
+  "version": "0.1.0-preview.3",
   "description": "Next.js middleware adapter for Coraza WAF (Node runtime).",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",
