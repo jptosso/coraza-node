@@ -18,7 +18,7 @@
 
 import { createRequire } from 'node:module'
 import { dirname, resolve as pathResolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const WASM_REL = 'dist/wasm/coraza.wasm'
 const WORKER_REL = 'dist/pool-worker.mjs'
@@ -114,4 +114,51 @@ export function defaultWasmPathWithMetaUrl(metaUrl: string | undefined): URL {
 
 export function defaultPoolWorkerPathWithMetaUrl(metaUrl: string | undefined): URL {
   return resolveAsset(WORKER_REL, './pool-worker.mjs', metaUrl)
+}
+
+/**
+ * Convert a `file:` URL (or duck-typed equivalent) to a filesystem path.
+ *
+ * Prefers Node's native `fileURLToPath`. Falls back to manual decoding when
+ * the URL is an instance of a bundler-duplicated `URL` class — webpack and
+ * Turbopack embed a second copy of `node:url` when middleware code is
+ * bundled, so the URL fails Node's native `instanceof URL` check inside
+ * `fileURLToPath` with `ERR_INVALID_ARG_TYPE`.
+ *
+ * The manual fallback handles three URL shapes:
+ *
+ *   POSIX:   file:///home/user/coraza.wasm   → /home/user/coraza.wasm
+ *   Windows: file:///C:/Users/me/coraza.wasm → C:/Users/me/coraza.wasm
+ *   Windows UNC: file://server/share/file    → //server/share/file
+ *
+ * The Windows shapes are the ones a hand-written `decodeURIComponent
+ * (u.pathname)` gets wrong — `pathname` is `/C:/...` and Node's `readFile`
+ * / `worker_threads.Worker` constructor then both reject the path. We
+ * detect a leading drive-letter pattern (`/X:/...`) and strip the leading
+ * slash; UNC URLs use `host` instead of leading-component pathname so
+ * we reconstruct `//host/share/...` from `u.host` + `u.pathname`.
+ */
+export function urlToFsPath(u: URL | { protocol: string; pathname: string; host?: string; href?: string }): string {
+  try {
+    return fileURLToPath(u as URL)
+  } catch {
+    /* fall through to manual decode */
+  }
+  const pathname = decodeURIComponent(u.pathname)
+  const host = u.host ?? ''
+  // Windows UNC: file://server/share/path → \\server\share\path. Use the
+  // forward-slash form because both Node fs and the Worker constructor
+  // accept it on Windows, and it sidesteps any backslash-escaping
+  // ambiguity in surrounding code.
+  if (host && host !== '' && host !== 'localhost') {
+    return `//${host}${pathname}`
+  }
+  // Windows drive letter: pathname is `/C:/Users/...` — strip the leading
+  // slash so it becomes `C:/Users/...` which Node's fs accepts. Match
+  // explicitly on `/<letter>:/` to avoid mangling a POSIX path that
+  // legitimately contains a colon later in its first segment.
+  if (/^\/[a-zA-Z]:[\/\\]/.test(pathname)) {
+    return pathname.slice(1)
+  }
+  return pathname
 }

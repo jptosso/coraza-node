@@ -47,17 +47,25 @@ jobs:
           path: packages/core/src/wasm/coraza.wasm
           retention-days: 7
 
-  # One check row per package × Node version. GitHub renders each matrix
-  # leg as its own status line, so a regression in `@coraza/express` on
-  # Node 24 is visible at a glance without needing to drill in.
+  # One check row per package × Node version × OS. GitHub renders each
+  # matrix leg as its own status line, so a regression in `@coraza/express`
+  # on Node 24 / Windows is visible at a glance without drilling in.
+  #
+  # macOS and Windows runners catch OS-specific bugs in the WASM loader
+  # (file-URL handling, especially Windows drive-letter paths) and
+  # worker_threads spawn. The matrix is fully populated; we don't carry
+  # any conditional skips today. If a leg legitimately needs to skip on
+  # an OS in the future, document the reason here and gate the relevant
+  # step with `if:` rather than dropping the leg from the matrix.
   test:
-    name: Test · ${{ matrix.package }} · Node ${{ matrix.node }}
-    runs-on: ubuntu-latest
+    name: Test · ${{ matrix.package }} · Node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     needs: build-wasm
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: ['22', '24']
         package:
           - '@coraza/core'
@@ -103,8 +111,12 @@ jobs:
       - name: Unit tests + coverage
         run: pnpm turbo run test:coverage --filter=${{ matrix.package }}
 
+      # Upload coverage from one canonical leg only — all three OSes run
+      # the same tests against the same code, so coverage numbers are
+      # identical and uploading 3× would just serialize the runs in
+      # Codecov without adding signal.
       - name: Upload coverage
-        if: matrix.node == '22'
+        if: matrix.node == '22' && matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
           fail_ci_if_error: false
@@ -158,13 +170,14 @@ jobs:
         run: pnpm -F ${{ matrix.package }} build
 
   e2e:
-    name: E2E · ${{ matrix.adapter }}
-    runs-on: ubuntu-latest
+    name: E2E · ${{ matrix.adapter }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     needs: build-wasm
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         adapter: [express, fastify, next, nestjs]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -191,25 +204,63 @@ jobs:
             turbo-e2e-${{ matrix.adapter }}-${{ runner.os }}-
 
       # Playwright browsers are huge (~200 MB) and pinned to the
-      # @playwright/test version. Cache keyed on that version;
-      # on a cache miss the install step re-downloads.
+      # @playwright/test version. Cache keyed on that version + OS so
+      # macOS and Windows don't share Linux's binaries; on a cache miss
+      # the install step re-downloads.
       - name: Resolve Playwright version
         id: pw
+        shell: bash
         run: |
           v=$(pnpm -F @coraza/${{ matrix.adapter }} exec node -p "require('@playwright/test/package.json').version")
           echo "version=$v" >> "$GITHUB_OUTPUT"
-      - name: Cache Playwright browsers
-        id: pw-cache
+      # Playwright caches under a different path on each OS:
+      #   Linux:   ~/.cache/ms-playwright
+      #   macOS:   ~/Library/Caches/ms-playwright
+      #   Windows: %USERPROFILE%\AppData\Local\ms-playwright
+      # The matrix path is selected per-OS to avoid silently caching
+      # nothing.
+      - name: Cache Playwright browsers (Linux)
+        if: runner.os == 'Linux'
+        id: pw-cache-linux
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/ms-playwright
           key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
-      - name: Install Playwright browsers
-        if: steps.pw-cache.outputs.cache-hit != 'true'
+      - name: Cache Playwright browsers (macOS)
+        if: runner.os == 'macOS'
+        id: pw-cache-mac
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - name: Cache Playwright browsers (Windows)
+        if: runner.os == 'Windows'
+        id: pw-cache-win
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~\AppData\Local\ms-playwright
+          key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      # Determine cache hit across the three OS-specific cache steps.
+      # GitHub Actions has no straightforward `coalesce` for outputs, so
+      # we resolve the right one with a `||` chain.
+      - name: Install Playwright (Linux/macOS, cache miss)
+        if: runner.os != 'Windows' && (steps.pw-cache-linux.outputs.cache-hit != 'true' && steps.pw-cache-mac.outputs.cache-hit != 'true')
+        shell: bash
         run: pnpm -F @coraza/${{ matrix.adapter }} exec playwright install --with-deps chromium
-      - name: Install Playwright system deps only (cache hit)
-        if: steps.pw-cache.outputs.cache-hit == 'true'
+      - name: Install Playwright system deps only (Linux/macOS, cache hit)
+        if: runner.os != 'Windows' && (steps.pw-cache-linux.outputs.cache-hit == 'true' || steps.pw-cache-mac.outputs.cache-hit == 'true')
+        shell: bash
         run: pnpm -F @coraza/${{ matrix.adapter }} exec playwright install-deps chromium
+      # Windows has no `install-deps` (the chromium build ships with its
+      # own runtime), so we always run a plain `install --with-deps`.
+      # The browser binary is what gets cached; install on cache hit is
+      # a no-op (~1s) but skipping the system-deps step is required
+      # because `install-deps` errors with "not supported" on Windows.
+      - name: Install Playwright (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: pnpm -F @coraza/${{ matrix.adapter }} exec playwright install --with-deps chromium
 
       # Build the example app's full dependency graph. That's the adapter
       # + its own deps (core) AND @coraza/coreruleset, which every example
@@ -221,6 +272,7 @@ jobs:
         run: pnpm turbo run build --filter=@coraza/example-${{ matrix.adapter }}...
       - name: Build both Next examples + deps
         if: matrix.adapter == 'next'
+        shell: bash
         run: |
           pnpm turbo run build --filter=@coraza/example-next15... --filter=@coraza/example-next16...
       - name: E2E
@@ -229,6 +281,6 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: playwright-report-${{ matrix.adapter }}
+          name: playwright-report-${{ matrix.adapter }}-${{ matrix.os }}
           path: packages/${{ matrix.adapter }}/playwright-report
           retention-days: 14

@@ -17,10 +17,9 @@
 //   await tx.close()
 
 import { Worker } from 'node:worker_threads'
-import { fileURLToPath } from 'node:url'
 import { consoleLogger } from './logger.js'
 import { compileWasmModule } from './wasm.js'
-import { defaultWasmPath, defaultPoolWorkerPath } from './wasmResolve.js'
+import { defaultWasmPath, defaultPoolWorkerPath, urlToFsPath } from './wasmResolve.js'
 import type {
   Interruption,
   Logger,
@@ -585,16 +584,11 @@ function spawnSlot(logger: Logger, wasmModule?: WebAssembly.Module): WorkerSlot 
   // defaultWasmPath so Next.js 15's middleware bundler (which rewrites
   // import.meta.url) doesn't explode on pool boot.
   const workerUrl = defaultPoolWorkerPath()
-  // fileURLToPath() throws ERR_INVALID_ARG_TYPE when the URL is an
-  // instance of a bundler-duplicated URL class (webpack under Next 15
-  // middleware). Fall back to manual pathname decode — works across
-  // every bundler because it touches no classes.
-  let workerPath: string
-  try {
-    workerPath = fileURLToPath(workerUrl)
-  } catch {
-    workerPath = decodeURIComponent(workerUrl.pathname)
-  }
+  // Convert URL → fs path. urlToFsPath handles bundler-duplicated URL
+  // classes (webpack under Next 15 middleware) AND Windows drive-letter
+  // URLs whose pathname is `/C:/...` rather than `C:/...` — the
+  // Worker constructor rejects the leading-slash form.
+  const workerPath = urlToFsPath(workerUrl)
   const worker = new Worker(workerPath, {
     // Don't inherit the parent's loader args (e.g. --import tsx) — the worker
     // runs the pre-compiled pool-worker.mjs and doesn't need the TS loader.

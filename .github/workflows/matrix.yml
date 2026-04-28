@@ -59,9 +59,9 @@ jobs:
           retention-days: 7
 
   matrix:
-    name: ${{ matrix.case }} · node-${{ matrix.node }} · ${{ matrix.pool }}
+    name: ${{ matrix.case }} · node-${{ matrix.node }} · ${{ matrix.pool }} · ${{ matrix.os }}
     needs: build-wasm
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -77,6 +77,37 @@ jobs:
           - plain-cjs
         node: ['22', '24']
         pool: ['single', 'pool']
+        os: [ubuntu-latest]
+        # Add a narrow cross-OS slice on the cases most likely to surface
+        # OS-specific bugs (and that don't rely on Linux-specific tooling
+        # at boot). Single Node + single pool mode keeps the additional
+        # cost bounded — we run six extra legs (3 cases × 2 OSes) instead
+        # of 4×-ing the whole matrix.
+        include:
+          - case: express5
+            node: '22'
+            pool: 'single'
+            os: macos-latest
+          - case: express5
+            node: '22'
+            pool: 'single'
+            os: windows-latest
+          - case: fastify5
+            node: '22'
+            pool: 'single'
+            os: macos-latest
+          - case: fastify5
+            node: '22'
+            pool: 'single'
+            os: windows-latest
+          - case: plain-esm
+            node: '22'
+            pool: 'single'
+            os: macos-latest
+          - case: plain-esm
+            node: '22'
+            pool: 'single'
+            os: windows-latest
     env:
       CASE: ${{ matrix.case }}
       POOL: ${{ matrix.pool == 'pool' && '1' || '' }}
@@ -109,8 +140,10 @@ jobs:
         run: pnpm -F @coraza/matrix-${{ matrix.case }} build
 
       - name: Boot case and run driver
+        if: runner.os != 'Windows'
         env:
           CASE_HOST: 127.0.0.1
+        shell: bash
         run: |
           set -uo pipefail
           # Random high port per leg. The hardcoded 41000/42000 was
@@ -143,11 +176,51 @@ jobs:
             exit "$rc"
           fi
 
+      # Windows lacks `pkill` and `kill -TERM "$pid"` semantics differ
+      # under msys; use PowerShell to manage the background server tree.
+      # The driver script is OS-agnostic — it talks HTTP to whatever's on
+      # CASE_PORT — so the only Windows-specific code is the boot/teardown
+      # plumbing.
+      - name: Boot case and run driver (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CASE_HOST: 127.0.0.1
+        shell: pwsh
+        run: |
+          $port = $env:LEG_PORT
+          $log = Join-Path $env:RUNNER_TEMP "$env:CASE-${{ matrix.node }}-${{ matrix.pool }}.log"
+          $env:PORT = $port
+          $env:NODE_ENV = "production"
+          $proc = Start-Process -FilePath "pnpm" -ArgumentList @("-F","@coraza/matrix-$env:CASE","start") -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -NoNewWindow
+          "APP_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          $env:CASE_PORT = $port
+          $env:CASE_NAME = $env:CASE
+          $env:BOOT_TIMEOUT = "90"
+          $rc = 0
+          try {
+            & node testing/matrix/scripts/check.mjs
+            $rc = $LASTEXITCODE
+          } catch {
+            $rc = 1
+          }
+
+          # Tear down the server tree. taskkill /T walks child processes.
+          taskkill /PID $proc.Id /T /F 2>$null
+          if ($rc -ne 0) {
+            Write-Host "::group::$env:CASE server log"
+            if (Test-Path $log) { Get-Content $log -Tail 200 }
+            if (Test-Path "$log.err") { Get-Content "$log.err" -Tail 200 }
+            Write-Host "::endgroup::"
+            exit $rc
+          }
+
       - name: Upload server log on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: matrix-log-${{ matrix.case }}-node${{ matrix.node }}-${{ matrix.pool }}
+          name: matrix-log-${{ matrix.case }}-node${{ matrix.node }}-${{ matrix.pool }}-${{ matrix.os }}
           path: ${{ env.LOG }}
           retention-days: 14
 

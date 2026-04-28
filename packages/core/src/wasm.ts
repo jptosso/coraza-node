@@ -3,11 +3,11 @@
 
 import { readFile } from 'node:fs/promises'
 import { WASI } from 'node:wasi'
-import { fileURLToPath } from 'node:url'
 import { Abi, type CorazaExports } from './abi.js'
 import { patchInitialMemory, readInitialMemoryPages } from './wasmPatch.js'
 import { createMinimalWasi, useNativeWasi } from './wasi.js'
 import { createHostRegex } from './hostRegex.js'
+import { urlToFsPath } from './wasmResolve.js'
 import type { Logger } from './types.js'
 
 // CRS's regex compilation needs ~100 MiB of linear memory up front. The
@@ -22,8 +22,10 @@ export type WasmSource = ArrayBufferLike | Uint8Array | URL | string
 // node runtime) can embed a second copy of `node:url`, so the URL we
 // constructed in wasmResolve.ts is an instance of a DIFFERENT URL class
 // than the one Node's `fileURLToPath` / `instanceof URL` check against.
-// Duck-type on `protocol`/`pathname` and fall back to manual file-URL
-// decoding when fileURLToPath rejects. See coraza-incubator/coraza-node#16.
+// Duck-type on `protocol`/`pathname` so the loader works whichever URL
+// class the bundle handed us; the actual fs-path conversion (including
+// the Windows drive-letter fix) lives in wasmResolve.ts.
+// See coraza-incubator/coraza-node#16.
 function isUrlLike(x: unknown): x is URL {
   return (
     typeof x === 'object' &&
@@ -31,14 +33,6 @@ function isUrlLike(x: unknown): x is URL {
     typeof (x as { protocol?: unknown }).protocol === 'string' &&
     typeof (x as { pathname?: unknown }).pathname === 'string'
   )
-}
-
-function urlToFsPath(u: URL): string {
-  try {
-    return fileURLToPath(u)
-  } catch {
-    return decodeURIComponent(u.pathname)
-  }
 }
 
 async function resolveBytes(src: WasmSource): Promise<Uint8Array> {

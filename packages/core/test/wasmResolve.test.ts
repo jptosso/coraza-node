@@ -6,6 +6,7 @@ import {
   defaultPoolWorkerPath,
   defaultWasmPathWithMetaUrl,
   defaultPoolWorkerPathWithMetaUrl,
+  urlToFsPath,
 } from '../src/wasmResolve.js'
 
 describe('default WASM / pool-worker resolution', () => {
@@ -76,5 +77,60 @@ describe('default WASM / pool-worker resolution', () => {
     const u = defaultWasmPathWithMetaUrl('https://example.invalid/app.js')
     expect(u.protocol).toBe('file:')
     expect(fileURLToPath(u)).toMatch(/dist[\/\\]wasm[\/\\]coraza\.wasm$/)
+  })
+})
+
+describe('urlToFsPath', () => {
+  // The reason this helper exists at all: under webpack/Turbopack a
+  // bundle can ship a duplicate URL class, so the URL we hand
+  // `fileURLToPath` is no longer `instanceof URL` from Node's POV. The
+  // fallback path below is the one users actually run on Windows.
+  function fakeBundlerUrl(href: string): { protocol: string; pathname: string; host: string; href: string } {
+    const real = new URL(href)
+    return {
+      protocol: real.protocol,
+      pathname: real.pathname,
+      host: real.host,
+      href: real.href,
+    }
+  }
+
+  it('converts a POSIX file URL through fileURLToPath', () => {
+    const u = new URL('file:///home/user/coraza.wasm')
+    expect(urlToFsPath(u)).toBe('/home/user/coraza.wasm')
+  })
+
+  it('falls back when the URL is from a duplicated URL class (POSIX)', () => {
+    // Real URL from Node's classes works on every platform.
+    const u = fakeBundlerUrl('file:///home/user/coraza.wasm')
+    expect(urlToFsPath(u as unknown as URL)).toBe('/home/user/coraza.wasm')
+  })
+
+  it('strips the leading slash from a Windows drive-letter file URL', () => {
+    // Synthetic Windows file URL — `pathname` is `/C:/Users/me/coraza.wasm`
+    // which Node.js readFile rejects on Windows. The helper must return
+    // `C:/Users/me/coraza.wasm` regardless of which platform the unit
+    // test runs on.
+    const u = fakeBundlerUrl('file:///C:/Users/me/coraza.wasm')
+    expect(urlToFsPath(u as unknown as URL)).toBe('C:/Users/me/coraza.wasm')
+  })
+
+  it('strips the leading slash from a Windows drive-letter file URL with a space', () => {
+    const u = fakeBundlerUrl('file:///D:/Program%20Files/coraza/coraza.wasm')
+    expect(urlToFsPath(u as unknown as URL)).toBe('D:/Program Files/coraza/coraza.wasm')
+  })
+
+  it('handles a Windows UNC file URL', () => {
+    // file://server/share/path → //server/share/path
+    const u = fakeBundlerUrl('file://server/share/coraza.wasm')
+    expect(urlToFsPath(u as unknown as URL)).toBe('//server/share/coraza.wasm')
+  })
+
+  it('does not mangle a POSIX path whose first segment contains a colon later', () => {
+    // A POSIX file at /a:b/c is legal. The drive-letter regex requires
+    // exactly `/<letter>:/`, so a multi-character first segment must not
+    // match.
+    const u = fakeBundlerUrl('file:///foo:bar/coraza.wasm')
+    expect(urlToFsPath(u as unknown as URL)).toBe('/foo:bar/coraza.wasm')
   })
 })
