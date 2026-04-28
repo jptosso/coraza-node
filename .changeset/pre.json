@@ -33,6 +33,7 @@
     "dts-cts-turbopack-compat",
     "fastify-pool-response-phase",
     "initial-preview",
+    "issue-23-block-log-matched-rules",
     "issue-26-inspect-body",
     "matrix-test-infra",
     "narrow-peer-deps",
