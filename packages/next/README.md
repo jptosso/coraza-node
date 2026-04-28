@@ -130,6 +130,35 @@ The legacy `skip:` option is deprecated and mapped to `ignore:` at
 construction (one-shot warning per process). It will be removed at
 stable 0.1.
 
+### Body handling
+
+The runner reads the request body via `req.arrayBuffer()` before
+forwarding to your route handler. On Next 16 (`proxy.ts`) the runtime
+buffers the request and the route handler can still call `req.json()`
+or `req.formData()` against its own copy. We test against Next 16.x;
+older versions or runtimes that don't re-inject the body MAY break
+downstream parsers — symptom is `Unexpected end of JSON input` from
+your route handler with no Coraza log line.
+
+If body re-injection isn't reliable on your runtime, OR you want
+WAF on headers/URL only (a common false-positive reduction), opt out:
+
+```ts
+export const proxy = coraza({ waf, inspectBody: false })
+```
+
+`inspectBody: false`:
+- Skips `req.arrayBuffer()` entirely; body reaches your route handler
+  untouched.
+- Disables body-targeted CRS rules (`ARGS_POST`, `REQUEST_BODY`) —
+  most XSS and many SQLi attacks won't be detected.
+- Still runs URL + header + cookie rules and the phase-2 anomaly
+  evaluator on every request.
+
+Default is `inspectBody: true`. **Flipping it off is a security
+trade-off** — body-bearing attacks become invisible. Document why
+you're doing it in your codebase.
+
 ### Limitation — no response-body inspection
 
 Next middleware / proxy runs on the request boundary. Route Handlers own

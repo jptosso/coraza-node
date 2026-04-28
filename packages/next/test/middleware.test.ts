@@ -311,6 +311,57 @@ describe('@coraza/next', () => {
     const png = await mw(makeReq('https://example.com/img/logo.png'))
     expect(png.status).toBe(403)
   })
+
+  // Issue #26 — request body consumption is undocumented and adapter-fragile.
+  // `inspectBody: false` lets users opt out of body inspection — the
+  // body is left untouched, the runner skips `req.arrayBuffer()`
+  // entirely, and body-targeted CRS rules see an empty body. URL +
+  // header rules and the phase-2 anomaly evaluator still run.
+  it('issue #26: inspectBody: false leaves the request body untouched', async () => {
+    const { waf, state } = mockWAF('block')
+    const mw = coraza({ waf, inspectBody: false })
+    const payload = JSON.stringify({ msg: '<script>alert(1)</script>' })
+    const req = makeReq('https://example.com/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+    })
+    const arrayBufferSpy = vi.spyOn(req, 'arrayBuffer')
+    await mw(req)
+    expect(arrayBufferSpy).not.toHaveBeenCalled()
+    expect(state.nextTx).toBe(1)
+  })
+
+  it('issue #26: inspectBody: false still allows header/URL rules to fire', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) =>
+        tx.uri?.uri?.includes('attack')
+          ? { ruleId: 942100, action: 'deny', status: 403, data: 'SQLi-in-URL' }
+          : undefined,
+    })
+    const mw = coraza({ waf, inspectBody: false })
+    const res = await mw(
+      makeReq('https://example.com/?q=attack', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ harmless: true }),
+      }),
+    )
+    expect(res.status).toBe(403)
+  })
+
+  it('issue #26: default (inspectBody not set) still reads the body', async () => {
+    const { waf } = mockWAF('block')
+    const mw = coraza({ waf })
+    const req = makeReq('https://example.com/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ msg: '<script>' }),
+    })
+    const arrayBufferSpy = vi.spyOn(req, 'arrayBuffer')
+    await mw(req)
+    expect(arrayBufferSpy).toHaveBeenCalled()
+  })
 })
 
 // Compose-with-existing-proxy contract. The runner exposes a structured
