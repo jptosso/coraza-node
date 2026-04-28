@@ -516,4 +516,110 @@ describe('@coraza/express', () => {
     await request(app).get('/')
     expect(warn).toHaveBeenCalledWith('coraza: request blocked', expect.any(Object))
   })
+
+  it('ignore: { methods } skips configured methods entirely', async () => {
+    const { waf, state } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const app = express()
+    app.use(coraza({ waf, ignore: { methods: ['OPTIONS'] } }))
+    app.options('/api', (_req, res) => res.send('ok'))
+    app.get('/api', (_req, res) => res.send('ok'))
+    expect((await request(app).options('/api')).status).toBe(200)
+    expect((await request(app).get('/api')).status).toBe(403)
+    expect(state.nextTx).toBe(1)
+  })
+
+  it('ignore: { routes } supports glob and regex routes', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const app = express()
+    app.use(coraza({ waf, ignore: { routes: ['/healthz', /^\/internal/] } }))
+    app.get('/healthz', (_req, res) => res.send('ok'))
+    app.get('/internal/x', (_req, res) => res.send('ok'))
+    app.get('/api', (_req, res) => res.send('ok'))
+    expect((await request(app).get('/healthz')).status).toBe(200)
+    expect((await request(app).get('/internal/x')).status).toBe(200)
+    expect((await request(app).get('/api')).status).toBe(403)
+  })
+
+  it('ignore: { headerEquals } bypasses on matching headers', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const app = express()
+    app.use(coraza({ waf, ignore: { headerEquals: { 'x-internal': 'true' } } }))
+    app.get('/api', (_req, res) => res.send('ok'))
+    expect((await request(app).get('/api').set('x-internal', 'true')).status).toBe(200)
+    expect((await request(app).get('/api').set('x-internal', 'false')).status).toBe(403)
+  })
+
+  it('ignore: { bodyLargerThan } skips body inspection on oversized POSTs', async () => {
+    // Predicate fires only when the body actually reached Coraza non-empty.
+    // 'skip-body' means we still process URL+headers but feed an empty body
+    // into the bundle, so the predicate must not see the user's payload.
+    const { waf, state } = mockWAF('block', {
+      onBody: (tx) =>
+        tx.lastBody && tx.lastBody.length > 0
+          ? { ruleId: 941100, action: 'deny', status: 403, data: 'XSS' }
+          : undefined,
+    })
+    const app = express()
+    app.use(express.json({ limit: '10mb' }))
+    app.use(coraza({ waf, ignore: { bodyLargerThan: 100 } }))
+    app.post('/echo', (req, res) => res.json(req.body ?? {}))
+    const big = JSON.stringify({ msg: '<script>'.repeat(50) })
+    const res = await request(app)
+      .post('/echo')
+      .set('content-length', String(big.length))
+      .set('content-type', 'application/json')
+      .send(big)
+    expect(res.status).toBe(200)
+    expect(state.nextTx).toBe(1)
+  })
+
+  it('ignore: { match } imperative escape hatch overrides declarative skip', async () => {
+    // Declarative says "skip /healthz"; match says "don't skip if header
+    // x-suspicious=yes". Most-restrictive wins → false (inspect).
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const app = express()
+    app.use(
+      coraza({
+        waf,
+        ignore: {
+          routes: ['/healthz'],
+          match: (ctx) =>
+            (ctx.headers as Map<string, string>).get('x-suspicious') === 'yes' ? false : true,
+        },
+      }),
+    )
+    app.get('/healthz', (_req, res) => res.send('ok'))
+    expect((await request(app).get('/healthz')).status).toBe(200)
+    expect((await request(app).get('/healthz').set('x-suspicious', 'yes')).status).toBe(403)
+  })
+
+  it('legacy skip: maps to ignore: equivalent shape', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const app = express()
+    app.use(coraza({ waf, skip: { prefixes: ['/healthz'] } }))
+    app.get('/healthz', (_req, res) => res.send('ok'))
+    app.get('/api', (_req, res) => res.send('ok'))
+    expect((await request(app).get('/healthz')).status).toBe(200)
+    expect((await request(app).get('/api')).status).toBe(403)
+  })
+
+  it('ignore: false disables all bypass', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const app = express()
+    app.use(coraza({ waf, ignore: false }))
+    app.get('/img/logo.png', (_req, res) => res.send('ok'))
+    expect((await request(app).get('/img/logo.png')).status).toBe(403)
+  })
 })

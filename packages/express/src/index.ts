@@ -24,8 +24,11 @@ import type {
   Logger,
   RequestInfo,
   SkipOptions,
+  IgnoreSpec,
+  IgnoreContext,
+  IgnoreVerdict,
 } from '@coraza/core'
-import { buildSkipPredicate, consoleLogger, pathOf } from '@coraza/core'
+import { buildIgnoreMatcher, consoleLogger, skipToIgnore } from '@coraza/core'
 import type { Request, RequestHandler, Response } from 'express'
 
 export interface CorazaExpressOptions {
@@ -50,10 +53,19 @@ export interface CorazaExpressOptions {
    */
   inspectResponse?: boolean
   /**
-   * Bypass Coraza for matching requests. Defaults match common static-asset
-   * paths and extensions (images, CSS, JS, fonts, /_next/static, /public/…).
-   * Pass `{ skipDefaults: true }` to disable the defaults entirely.
-   * Pass `false` to disable bypass altogether.
+   * Bypass Coraza for matching requests. The unified spec covers extensions,
+   * route globs/regex, HTTP methods, body-size cutoffs, header equality,
+   * and an imperative `match` escape hatch. Defaults skip common static
+   * extensions; pass `{ skipDefaults: true }` to disable them, or
+   * `false` to disable bypass altogether.
+   *
+   * See README "Skipping the WAF" for the field table.
+   */
+  ignore?: IgnoreSpec | false
+  /**
+   * @deprecated Use `ignore:` instead. The legacy `skip:` shape is mapped
+   * to `ignore:` at construction and emits a one-shot deprecation warning.
+   * Removed at stable 0.1.
    */
   skip?: SkipOptions | false
   /**
@@ -82,7 +94,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     inspectResponse = false,
     onWAFError = 'block',
   } = options
-  const shouldSkip = options.skip === false ? () => false : buildSkipPredicate(options.skip)
+  const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
   // Resolve the (possibly deferred) WAF on first use and memoize. Accepting
   // a Promise keeps symmetry with @coraza/next's middleware shape and lets
@@ -103,7 +115,8 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
   // surface (newTransaction / Transaction has the same method names). We
   // `await` every call so the middleware works against either.
   return async function corazaMiddleware(req, res, next) {
-    if (shouldSkip(pathOf(req.originalUrl || req.url))) {
+    const verdict = matcher === null ? false : matcher(buildIgnoreCtx(req))
+    if (verdict === true) {
       next()
       return
     }
@@ -171,7 +184,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
         remotePort: req.socket.remotePort ?? 0,
         serverPort: req.socket.localPort ?? 0,
       }
-      const bodyBuf = extractBody(req)
+      const bodyBuf = verdict === 'skip-body' ? undefined : extractBody(req)
       const interrupted = await tx.processRequestBundle(reqInfo, bodyBuf)
       if (interrupted) {
         return emitBlock(await tx.interruption(), req, res, onBlock, log)
@@ -213,6 +226,70 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
 // A union of Transaction (sync) and WorkerTransaction (async) — both have
 // the same method names; differing return types get uniformly awaited.
 type AnyTransaction = Awaited<ReturnType<AnyWAF['newTransaction']>>
+
+/**
+ * Resolve the per-request ignore matcher from the new `ignore` option,
+ * falling back to the deprecated `skip` shape (with a one-shot warning).
+ * Returns `null` when bypass is explicitly disabled.
+ */
+function resolveIgnoreMatcher(
+  ignore: IgnoreSpec | false | undefined,
+  skip: SkipOptions | false | undefined,
+): ((ctx: IgnoreContext) => IgnoreVerdict) | null {
+  if (ignore === false || skip === false) return null
+  if (ignore !== undefined) return buildIgnoreMatcher(ignore)
+  const mapped = skipToIgnore(skip)
+  if (skip !== undefined && !legacyWarnedExpress) {
+    legacyWarnedExpress = true
+    // eslint-disable-next-line no-console
+    console.warn(
+      'coraza: the `skip:` option is deprecated and will be removed at stable 0.1; ' +
+        'migrate to `ignore: { extensions, routes, methods, bodyLargerThan, headerEquals, match }`.',
+    )
+  }
+  return buildIgnoreMatcher(mapped)
+}
+
+let legacyWarnedExpress = false
+
+function buildIgnoreCtx(req: Request): IgnoreContext {
+  const url = parseUrl(req)
+  const cl = parseContentLength(req.headers['content-length'])
+  const headers = req.headers as unknown as Record<string, string | string[] | undefined>
+  const map = new Map<string, string>()
+  for (const k in headers) {
+    const v = headers[k]
+    if (v === undefined) continue
+    map.set(k, Array.isArray(v) ? v.join(',') : v)
+  }
+  return Object.freeze({
+    method: req.method,
+    url,
+    headers: map,
+    contentLength: cl,
+  })
+}
+
+function parseUrl(req: Request): URL {
+  // Prefer originalUrl for routers; fall back to url. Express paths are
+  // path-only ("/api/x?q=1"); URL needs a base. Hardcoding 'http://x' keeps
+  // pathname/search exact and avoids a real socket lookup hot-path.
+  const raw = req.originalUrl || req.url || '/'
+  try {
+    return new URL(raw, 'http://x')
+  } catch {
+    /* c8 ignore next 2 — defensive: URL with a base origin succeeds for any
+       string we'd see from Express; fallback so a malformed URL never throws into the catch-and-next path. */
+    return new URL('/', 'http://x')
+  }
+}
+
+function parseContentLength(v: string | string[] | undefined): number | null {
+  if (v === undefined) return null
+  const s = Array.isArray(v) ? v[0]! : v
+  const n = Number(s)
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
 
 
 export function defaultBlock(interruption: Interruption, _req: Request, res: Response): void {

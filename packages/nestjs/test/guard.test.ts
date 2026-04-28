@@ -255,4 +255,96 @@ describe('CorazaGuard', () => {
     )
     expect(ok).toBe(true)
   })
+
+  it('ignore: { methods } skips entirely', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const guard = new CorazaGuard(waf, { ignore: { methods: ['OPTIONS'] } })
+    const ok = await guard.canActivate(
+      ctx({ method: 'OPTIONS', url: '/api', headers: {}, socket: {} }),
+    )
+    expect(ok).toBe(true)
+  })
+
+  it('ignore: { headerEquals } bypasses on matching header', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const guard = new CorazaGuard(waf, {
+      ignore: { headerEquals: { 'x-internal': 'yes' } },
+    })
+    const ok = await guard.canActivate(
+      ctx({ method: 'GET', url: '/api', headers: { 'x-internal': 'yes' }, socket: {} }),
+    )
+    expect(ok).toBe(true)
+  })
+
+  it('ignore: { bodyLargerThan } skips body inspection (URL+headers still run)', async () => {
+    const { waf } = mockWAF('block', {
+      onBody: (tx) =>
+        tx.lastBody && tx.lastBody.length > 0
+          ? { ruleId: 941100, action: 'deny', status: 403, data: 'XSS' }
+          : undefined,
+    })
+    const guard = new CorazaGuard(waf, { ignore: { bodyLargerThan: 100 } })
+    const ok = await guard.canActivate(
+      ctx({
+        method: 'POST',
+        url: '/upload',
+        headers: { 'content-length': '5000', 'content-type': 'application/json' },
+        body: { x: '<script>'.repeat(100) },
+        socket: {},
+      }),
+    )
+    expect(ok).toBe(true) // body wasn't sent to the bundle
+  })
+
+  it('ignore: { match } most-restrictive merges with declarative skip', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const guard = new CorazaGuard(waf, {
+      ignore: {
+        routes: ['/healthz'],
+        match: (c) =>
+          (c.headers as Map<string, string>).get('x-suspicious') === 'yes' ? false : true,
+      },
+    })
+    const ok = await guard.canActivate(
+      ctx({ method: 'GET', url: '/healthz', headers: {}, socket: {} }),
+    )
+    expect(ok).toBe(true)
+    await expect(
+      guard.canActivate(
+        ctx({
+          method: 'GET',
+          url: '/healthz',
+          headers: { 'x-suspicious': 'yes' },
+          socket: {},
+        }),
+      ),
+    ).rejects.toThrow()
+  })
+
+  it('legacy skip: still maps to ignore: shape', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const guard = new CorazaGuard(waf, { skip: { prefixes: ['/healthz'] } })
+    const ok = await guard.canActivate(
+      ctx({ method: 'GET', url: '/healthz', headers: {}, socket: {} }),
+    )
+    expect(ok).toBe(true)
+  })
+
+  it('ignore: false disables bypass', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const guard = new CorazaGuard(waf, { ignore: false })
+    await expect(
+      guard.canActivate(ctx({ method: 'GET', url: '/img/logo.png', headers: {}, socket: {} })),
+    ).rejects.toThrow()
+  })
 })

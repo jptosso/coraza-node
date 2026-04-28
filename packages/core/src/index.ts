@@ -24,10 +24,19 @@ export type WAFLike = AnyWAF | Promise<AnyWAF>
 export {
   buildSkipPredicate,
   pathOf,
+  skipToIgnore,
   DEFAULT_SKIP_EXTENSIONS,
   DEFAULT_SKIP_PREFIXES,
   type SkipOptions,
 } from './skip.js'
+export {
+  buildIgnoreMatcher,
+  DEFAULT_IGNORE_EXTENSIONS,
+  type IgnoreSpec,
+  type IgnoreContext,
+  type IgnoreVerdict,
+  type IgnoreMatcher,
+} from './ignore.js'
 export type {
   Logger,
   Mode,

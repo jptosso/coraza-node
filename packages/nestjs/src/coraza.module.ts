@@ -5,6 +5,7 @@ import {
   type WAFLike,
   type WAFConfig,
   type SkipOptions,
+  type IgnoreSpec,
   type Interruption,
 } from '@coraza/core'
 import { CorazaGuard } from './coraza.guard.js'
@@ -34,7 +35,12 @@ interface CorazaNestCommonOptions {
    * Default true.
    */
   globalGuard?: boolean
-  /** Bypass Coraza for static/media paths. See `SkipOptions`. */
+  /** Unified WAF-bypass spec. See README "Skipping the WAF". */
+  ignore?: IgnoreSpec | false
+  /**
+   * @deprecated Use `ignore:` instead. Mapped at construction with a
+   * one-shot deprecation warning. Removed at stable 0.1.
+   */
   skip?: SkipOptions | false
   /**
    * Build the HttpException thrown on a block decision. Receives the

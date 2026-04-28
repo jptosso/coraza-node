@@ -383,4 +383,116 @@ describe('@coraza/fastify', () => {
     )
     expect(code).toHaveBeenCalledWith(403)
   })
+
+  it('ignore: { methods } skips configured methods entirely', async () => {
+    const { app, state } = await appWith(
+      { onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }) },
+      { ignore: { methods: ['OPTIONS'] } },
+    )
+    app.options('/api', async () => 'ok')
+    app.get('/api', async () => 'ok')
+    expect((await app.inject({ method: 'OPTIONS', url: '/api' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api' })).statusCode).toBe(403)
+    expect(state.nextTx).toBe(1)
+    await app.close()
+  })
+
+  it('ignore: { routes } supports glob and regex routes', async () => {
+    const { app } = await appWith(
+      { onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }) },
+      { ignore: { routes: ['/healthz', /^\/internal/] } },
+    )
+    app.get('/healthz', async () => 'ok')
+    app.get('/internal/x', async () => 'ok')
+    app.get('/api', async () => 'ok')
+    expect((await app.inject({ method: 'GET', url: '/healthz' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/internal/x' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api' })).statusCode).toBe(403)
+    await app.close()
+  })
+
+  it('ignore: { headerEquals } bypasses on matching header', async () => {
+    const { app } = await appWith(
+      { onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }) },
+      { ignore: { headerEquals: { 'x-internal': 'true' } } },
+    )
+    app.get('/api', async () => 'ok')
+    const ok = await app.inject({
+      method: 'GET',
+      url: '/api',
+      headers: { 'x-internal': 'true' },
+    })
+    expect(ok.statusCode).toBe(200)
+    const blocked = await app.inject({ method: 'GET', url: '/api' })
+    expect(blocked.statusCode).toBe(403)
+    await app.close()
+  })
+
+  it('ignore: { bodyLargerThan } returns skip-body and runs URL+headers only', async () => {
+    const { app } = await appWith(
+      {
+        onBody: (tx) =>
+          tx.lastBody && tx.lastBody.length > 0
+            ? { ruleId: 941100, action: 'deny', status: 403, data: 'XSS' }
+            : undefined,
+      },
+      { ignore: { bodyLargerThan: 100 } },
+    )
+    const big = JSON.stringify({ msg: '<script>'.repeat(50) })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/echo',
+      headers: { 'content-type': 'application/json', 'content-length': String(big.length) },
+      payload: big,
+    })
+    expect(res.statusCode).toBe(200)
+    await app.close()
+  })
+
+  it('ignore: { match } imperative escape hatch overrides declarative skip (most-restrictive)', async () => {
+    const { app } = await appWith(
+      { onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }) },
+      {
+        ignore: {
+          routes: ['/healthz'],
+          match: (ctx) =>
+            (ctx.headers as Map<string, string>).get('x-suspicious') === 'yes' ? false : true,
+        },
+      },
+    )
+    app.get('/healthz', async () => 'ok')
+    expect((await app.inject({ method: 'GET', url: '/healthz' })).statusCode).toBe(200)
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/healthz',
+          headers: { 'x-suspicious': 'yes' },
+        })
+      ).statusCode,
+    ).toBe(403)
+    await app.close()
+  })
+
+  it('legacy skip: still works and matches new ignore: shape', async () => {
+    const { app } = await appWith(
+      { onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }) },
+      { skip: { prefixes: ['/healthz'] } },
+    )
+    app.get('/healthz', async () => 'ok')
+    app.get('/api', async () => 'ok')
+    expect((await app.inject({ method: 'GET', url: '/healthz' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api' })).statusCode).toBe(403)
+    await app.close()
+  })
+
+  it('ignore: false disables bypass', async () => {
+    const { app } = await appWith(
+      { onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }) },
+      { ignore: false },
+    )
+    app.get('/img/logo.png', async () => 'ok')
+    expect((await app.inject({ method: 'GET', url: '/img/logo.png' })).statusCode).toBe(403)
+    await app.close()
+  })
 })
