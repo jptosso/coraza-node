@@ -1,6 +1,6 @@
 {
   "name": "@coraza/coreruleset",
-  "version": "0.1.0-preview.1",
+  "version": "0.1.0-preview.2",
   "description": "OWASP CoreRuleSet config presets for @coraza/core. CRS rules ship inside the core WASM; this package selects which ones to enable.",
   "license": "Apache-2.0",
   "author": "Juan Pablo Tosso <jptosso@gmail.com>",

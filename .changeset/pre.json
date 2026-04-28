@@ -14,18 +14,35 @@
     "@coraza/express": "0.0.0",
     "@coraza/fastify": "0.0.0",
     "@coraza/nestjs": "0.0.0",
-    "@coraza/next": "0.0.0"
+    "@coraza/next": "0.0.0",
+    "@coraza/matrix-express4": "0.0.0",
+    "@coraza/matrix-express5": "0.0.0",
+    "@coraza/matrix-fastify5": "0.0.0",
+    "@coraza/matrix-nestjs11": "0.0.0",
+    "@coraza/matrix-next15-middleware": "0.0.0",
+    "@coraza/matrix-next15-middleware-turbopack": "0.0.0",
+    "@coraza/matrix-next16-proxy": "0.0.0",
+    "@coraza/matrix-next16-proxy-turbopack": "0.0.0",
+    "@coraza/matrix-plain-cjs": "0.0.0",
+    "@coraza/matrix-plain-esm": "0.0.0"
   },
   "changesets": [
     "core-pool-mjs-worker-ready-timeout",
     "crs-425-ftw-overrides-920640",
+    "dts-cts-turbopack-compat",
     "fastify-pool-response-phase",
     "initial-preview",
+    "matrix-test-infra",
+    "narrow-peer-deps",
     "next-16-peer",
+    "next-bundler-docs",
     "next-compose-runner",
     "next-readme-next16",
     "org-transfer",
     "rxmatch-fastpath",
-    "upstream-bump-20260422"
+    "skip-predicate-compound-extensions",
+    "upstream-bump-20260422",
+    "wasm-loader-bundler-fallback",
+    "wasm-loader-url-class-identity"
   ]
 }

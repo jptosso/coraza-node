@@ -1,5 +1,58 @@
 # @coraza/core
 
+## 0.1.0-preview.2
+
+### Patch Changes
+
+- 9f93ddc: Stop shipping `.d.cts` declaration files. tsup emits them with ESM
+  `import` syntax inside a `.cts` extension; Turbopack 16's package
+  scanner rejects this with "Specified module format (CommonJs) is not
+  matching the module format of the source code (EcmaScript Modules)"
+  and refuses to build any consumer that has the package in
+  `node_modules`.
+
+  `exports.types` in every package already points only at `.d.ts`,
+  which TypeScript resolves under both `nodenext` and `bundler`
+  moduleResolution for type-only imports — so the `.d.cts` files were
+  dead weight that only triggered false-positives.
+
+  Surfaced by the new bundler/runtime compatibility matrix exercising
+  Next 16 + Turbopack against tarballs installed via npm/yarn/pnpm.
+
+- 86cf133: Document `buildSkipPredicate` / `SkipOptions` extension match semantics on the
+  type itself (case-insensitive, query/fragment ignored, only the trailing
+  basename segment matches) and add support for **compound extensions**.
+
+  Entries containing a dot (e.g. `'tar.gz'`, `'min.js'`, `'d.ts'`) now match as a
+  `.<ext>` suffix on the path's basename. The leading `.` is required, so
+  `extensions: ['min.js']` skips `/bundle.min.js` but **does not** skip a request
+  whose pathname is literally `/min.js` (that's the bare filename, not a
+  `.min.js` extension). Single-token entries (`'css'`, `'png'`) keep their
+  existing behavior.
+
+  Closes #28.
+
+- 43602af: Default WASM loader now falls back through `createRequire` when the host
+  bundler rewrites `import.meta.url` to an empty or sentinel value. Fixes
+  `createWAF()` / `createWAFPool()` throwing `unsupported URL protocol:` at
+  boot under Next.js 15's middleware bundler. The same fallback applies to
+  the pool's `pool-worker.mjs` resolution. Behaviour is unchanged on
+  runtimes that expose a usable `import.meta.url` (every non-bundled Node
+  process, Next 16's `proxy.ts` pipeline, plain workers).
+- f59ec36: Resolve `URL` instances by duck-typing instead of `instanceof URL` and pre-convert
+  URLs to filesystem path strings before crossing into `worker_threads.Worker` and
+  `fs.promises.readFile`. Webpack and Turbopack can embed a second copy of
+  `node:url` when middleware code is bundled, so the URL the loader constructs
+  fails Node's native `instanceof URL` check inside `fileURLToPath`. The fallback
+  is an explicit `decodeURIComponent(u.pathname)` that takes no class identity
+  into account.
+
+  Together with the previous `createRequire` fallback, the default loader now
+  boots cleanly under every bundler the compatibility matrix exercises:
+  Express 4/5, Fastify 5, NestJS 11, Next.js 15 middleware (webpack +
+  Turbopack), Next.js 16 proxy (webpack + Turbopack), plain ESM, and plain
+  CJS — single-threaded and pool modes — with **zero `wasmSource` overrides**.
+
 ## 0.1.0-preview.1
 
 ### Patch Changes
