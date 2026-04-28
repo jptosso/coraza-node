@@ -530,4 +530,23 @@ describe('@coraza/fastify', () => {
     expect(calls.some((s) => s.includes('941100'))).toBe(true)
     await app.close()
   })
+
+  // Issue #25 — top-level createWAF rejection is silent. Fastify boot
+  // must fail loudly with the original error and `onWAFInit` must fire
+  // once with the original Error before the rejection propagates out
+  // of `register()`.
+  it('issue #25: rejecting waf promise fires onWAFInit and bubbles the original error', async () => {
+    const original = new Error('WASM compile failed: ABI version mismatch')
+    const onWAFInit = vi.fn()
+    const app = Fastify({ logger: false })
+    await expect(
+      app.register(coraza, {
+        waf: Promise.reject(original) as never,
+        onWAFInit,
+      }),
+    ).rejects.toThrow('WASM compile failed: ABI version mismatch')
+    expect(onWAFInit).toHaveBeenCalledTimes(1)
+    expect(onWAFInit).toHaveBeenCalledWith(original)
+    await app.close()
+  })
 })

@@ -79,6 +79,14 @@ export interface CorazaFastifyOptions {
    * always includes `interruption.data`.
    */
   verboseLog?: boolean
+  /**
+   * Fires once when the `waf` promise rejects (WASM compile failure,
+   * ABI mismatch, etc.). Use to surface the boot-time error in
+   * external healthchecks / loggers — the rejection itself still
+   * propagates out of `app.register(coraza, …)` so Fastify boot fails
+   * loudly; this hook just lets you snapshot the error first.
+   */
+  onWAFInit?: (err: Error) => void
 }
 
 /**
@@ -100,13 +108,32 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
     inspectResponse = false,
     onWAFError = 'block',
     verboseLog = false,
+    onWAFInit,
   } = opts
   const matcher = resolveIgnoreMatcher(opts.ignore, opts.skip)
 
   // Resolve the (possibly deferred) WAF once, on plugin register — plugin
   // registration is already async so we can safely `await` here and every
-  // subsequent hook sees a settled value.
-  const waf: AnyWAF = await wafOrPromise
+  // subsequent hook sees a settled value. Surface the original boot
+  // failure (WASM-init crash, ABI mismatch) via `onWAFInit` AND
+  // re-throw so fastify.register() rejects loudly. Without this the
+  // rejection is observable only by whoever awaits `register()` — by
+  // the time the first request arrives, no useful detail remains.
+  let waf: AnyWAF
+  try {
+    waf = await wafOrPromise
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err))
+    fastify.log.error(
+      `coraza: WAF init failed (this plugin won't register): ${e.stack ?? e.message}`,
+    )
+    try {
+      onWAFInit?.(e)
+    } catch {
+      // never let onWAFInit's own throw mask the original cause.
+    }
+    throw e
+  }
 
   fastify.decorateRequest(TX_SYMBOL as unknown as string, null)
 

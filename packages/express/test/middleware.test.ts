@@ -662,4 +662,35 @@ describe('@coraza/express', () => {
       expect.objectContaining({ ruleId: 941100 }),
     )
   })
+
+  // Issue #25 — top-level createWAF rejection is silent. The original
+  // error MUST fire onWAFInit (once) and the per-request error log
+  // MUST surface the original message + stack on every failed request.
+  it('issue #25: rejecting waf promise fires onWAFInit and exposes the original error', async () => {
+    const original = new Error('WASM compile failed: malformed module')
+    const onWAFInit = vi.fn()
+    const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }
+    const app = express()
+    app.use((req, _res, next) => {
+      ;(req as unknown as { log: typeof log }).log = log
+      next()
+    })
+    app.use(coraza({ waf: Promise.reject(original), onWAFInit }))
+    app.get('/hi', (_req, res) => res.send('ok'))
+    const r1 = await request(app).get('/hi')
+    expect(r1.status).toBe(503)
+    const r2 = await request(app).get('/hi')
+    expect(r2.status).toBe(503)
+    // onWAFInit fired exactly once with the original Error.
+    expect(onWAFInit).toHaveBeenCalledTimes(1)
+    expect(onWAFInit).toHaveBeenCalledWith(original)
+    // Per-request log carries the original message + stack.
+    expect(log.error).toHaveBeenCalledWith(
+      expect.stringContaining('WAF init failed'),
+      expect.objectContaining({
+        err: 'WASM compile failed: malformed module',
+        stack: expect.any(String),
+      }),
+    )
+  })
 })

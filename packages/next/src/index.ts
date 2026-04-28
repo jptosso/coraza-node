@@ -112,6 +112,18 @@ export interface CorazaNextOptions {
    * Costs one extra `tx.matchedRules()` round-trip per block; default `false`.
    */
   verboseLog?: boolean
+  /**
+   * Fires once when the `waf` promise rejects (e.g. WASM compile
+   * failure, ABI mismatch, OOM at boot). Use this to surface the
+   * original boot-time error in logs/healthchecks — without it, the
+   * rejection is deferred to the first request and only the generic
+   * "WAF unavailable" 503 is visible to the consumer.
+   *
+   * The callback is invoked at most once per `coraza()` instance and
+   * receives the original Error object (with stack). The runner still
+   * routes through `onWAFError` for per-request behavior.
+   */
+  onWAFInit?: (err: Error) => void
 }
 
 /**
@@ -158,14 +170,43 @@ export function createCorazaRunner(
     onWAFError = 'block',
     inspectBody = true,
     verboseLog = false,
+    onWAFInit,
   } = options
   const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
+  // Resolve the (possibly deferred) WAF on first reference and memoize.
+  // We keep the original Error object (not just `.message`) so the
+  // boot-time stack — most useful for diagnosing WASM-init crashes — is
+  // logged on EVERY request that hits the rejected runner, not silently
+  // collapsed to "WAF unavailable" once.
+  const wafPromise = Promise.resolve(wafOrPromise)
+  // Attach a no-op handler at factory time so a rejection that's noticed
+  // before the first request doesn't fire `unhandledRejection`. The same
+  // promise is awaited per request and the original error surfaces there.
+  wafPromise.catch(() => {})
   let wafRef: AnyWAF | null = null
+  let wafInitErr: Error | null = null
+  let onWAFInitFired = false
   const ensureWAF = async (): Promise<AnyWAF> => {
     if (wafRef) return wafRef
-    wafRef = await wafOrPromise
-    return wafRef
+    if (wafInitErr) throw wafInitErr
+    try {
+      wafRef = await wafPromise
+      return wafRef
+    } catch (err) {
+      wafInitErr = err instanceof Error ? err : new Error(String(err))
+      // Fire the init callback exactly once; consumers use this to
+      // surface the boot error in healthchecks / external loggers.
+      if (!onWAFInitFired) {
+        onWAFInitFired = true
+        try {
+          onWAFInit?.(wafInitErr)
+        } catch {
+          // never let an onWAFInit throw take down request handling.
+        }
+      }
+      throw wafInitErr
+    }
   }
 
   return async function runCoraza(req: NextRequest): Promise<CorazaDecision> {
@@ -173,7 +214,28 @@ export function createCorazaRunner(
     const verdict = matcher === null ? false : matcher(buildIgnoreCtx(req, url))
     if (verdict === true) return { allow: true }
 
-    const waf = await ensureWAF()
+    let waf: AnyWAF
+    try {
+      waf = await ensureWAF()
+    } catch (err) {
+      // The waf promise itself rejected. We have no `waf.logger` yet,
+      // so log via console with the FULL stack — the issue specifically
+      // calls out that "WAF unavailable" with no further detail is a
+      // deploy-killer, so re-emit the original cause on every failed
+      // request (cheap; only fires when the waf is permanently broken).
+      const e = err instanceof Error ? err : new Error(String(err))
+      // eslint-disable-next-line no-console
+      console.error('coraza: WAF init failed (this WAF will never serve traffic)', e.stack ?? e.message)
+      if (onWAFError === 'block') {
+        return {
+          blocked: onBlock(
+            { ruleId: 0, action: 'deny', status: 503, data: `WAF init failed: ${e.message}`, source: 'waf-error' },
+            req,
+          ),
+        }
+      }
+      return { allow: true }
+    }
     const log = waf.logger
 
     let tx

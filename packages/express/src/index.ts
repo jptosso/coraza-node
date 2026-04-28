@@ -98,6 +98,14 @@ export interface CorazaExpressOptions {
    * The default block log always includes `interruption.data`.
    */
   verboseLog?: boolean
+  /**
+   * Fires once when the `waf` promise rejects (WASM compile failure,
+   * ABI mismatch, OOM at boot). Use to surface the boot-time error in
+   * external healthchecks / loggers — without it, the rejection is
+   * deferred to first request and only the generic "WAF unavailable"
+   * 503 is visible.
+   */
+  onWAFInit?: (err: Error) => void
 }
 
 /**
@@ -120,6 +128,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     inspectResponse = false,
     onWAFError = 'block',
     verboseLog = false,
+    onWAFInit,
   } = options
   const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
@@ -132,10 +141,26 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
   const wafPromise = Promise.resolve(wafOrPromise)
   wafPromise.catch(() => {})
   let wafRef: AnyWAF | null = null
+  let wafInitErr: Error | null = null
+  let onWAFInitFired = false
   const ensureWAF = async (): Promise<AnyWAF> => {
     if (wafRef) return wafRef
-    wafRef = await wafPromise
-    return wafRef
+    if (wafInitErr) throw wafInitErr
+    try {
+      wafRef = await wafPromise
+      return wafRef
+    } catch (err) {
+      wafInitErr = err instanceof Error ? err : new Error(String(err))
+      if (!onWAFInitFired) {
+        onWAFInitFired = true
+        try {
+          onWAFInit?.(wafInitErr)
+        } catch {
+          // never let an onWAFInit throw take down request handling.
+        }
+      }
+      throw wafInitErr
+    }
   }
 
   // `waf` is either a sync WAF or an async WAFPool. Both expose the same
@@ -153,11 +178,18 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
     } catch (err) {
       // If the WAF promise itself rejects we can't open a transaction or
       // route through onBlock's logger. Treat as fail-closed by default.
+      // Re-emit the FULL stack on every failed request — this is the
+      // actual cause of "WAF unavailable" and burying it makes deploy
+      // failures undebuggable.
       const log = (req as ReqWithLog).log ?? consoleLogger
-      log.error('coraza: waf promise rejected', { err: (err as Error).message })
+      const e = err instanceof Error ? err : new Error(String(err))
+      log.error('coraza: WAF init failed (this WAF will never serve traffic)', {
+        err: e.message,
+        stack: e.stack,
+      })
       if (onWAFError === 'block' && !res.headersSent) {
         onBlock(
-          { ruleId: 0, action: 'deny', status: 503, data: 'WAF unavailable', source: 'waf-error' },
+          { ruleId: 0, action: 'deny', status: 503, data: `WAF init failed: ${e.message}`, source: 'waf-error' },
           req,
           res,
         )

@@ -427,6 +427,50 @@ describe('@coraza/next', () => {
     await mw(makeReq('https://example.com/x'))
     expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
   })
+
+  // Issue #25 — top-level createWAF rejection is silent. The original
+  // error (WASM compile failure, ABI mismatch, OOM at boot) MUST surface
+  // both to the optional onWAFInit hook AND on every per-request error
+  // path — otherwise every request returns "WAF unavailable" 503 with
+  // no useful clue about why.
+  it('issue #25: rejecting waf promise fires onWAFInit and surfaces original error per request', async () => {
+    const original = new Error('WASM compile failed: malformed module')
+    const onWAFInit = vi.fn()
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const mw = coraza({
+        waf: Promise.reject(original),
+        onWAFInit,
+      })
+      // Two requests — onWAFInit fires once; per-request error fires every time.
+      const r1 = await mw(makeReq('https://example.com/'))
+      expect(r1.status).toBe(503)
+      const r2 = await mw(makeReq('https://example.com/'))
+      expect(r2.status).toBe(503)
+      // onWAFInit fired exactly once with the original Error.
+      expect(onWAFInit).toHaveBeenCalledTimes(1)
+      expect(onWAFInit).toHaveBeenCalledWith(original)
+      // Per-request console.error carries the original message.
+      const lines = consoleErr.mock.calls.flat().map(String)
+      expect(lines.some((s) => s.includes('WASM compile failed'))).toBe(true)
+    } finally {
+      consoleErr.mockRestore()
+    }
+  })
+
+  it('issue #25: onWAFError=allow + rejected waf promise still passes the request through', async () => {
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const mw = coraza({
+        waf: Promise.reject(new Error('WAF boot failed')),
+        onWAFError: 'allow',
+      })
+      const res = await mw(makeReq('https://example.com/'))
+      expect(res.headers.get('x-middleware-next')).toBe('1')
+    } finally {
+      consoleErr.mockRestore()
+    }
+  })
 })
 
 // Compose-with-existing-proxy contract. The runner exposes a structured

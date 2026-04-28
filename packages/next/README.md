@@ -163,6 +163,39 @@ coraza({
 `verboseLog` adds one `tx.matchedRules()` round-trip per blocked
 request; default is `false`.
 
+### Surfacing WAF init failures
+
+`createWAF()` is async. If it rejects (WASM compile failure, ABI
+mismatch, OOM at boot), the rejection is deferred until the first
+request, and by then the only visible signal is a 503 with `data:
+"WAF unavailable"`. The original stack is buried.
+
+Two ways to recover the boot-time error:
+
+```ts
+// 1. Await at module top level if your runtime allows it (proxy.ts on
+// Next 16 supports top-level await):
+const waf = await createWAF({ rules: recommended(), mode: 'block' })
+export const proxy = coraza({ waf })
+```
+
+```ts
+// 2. Pass an `onWAFInit` callback. Fires once with the original
+// Error; useful for healthchecks and external loggers.
+export const proxy = coraza({
+  waf: createWAF({ rules: recommended(), mode: 'block' }),
+  onWAFInit: (err) => {
+    healthcheck.markCorazaUnhealthy(err)
+    console.error('coraza boot failed:', err.stack)
+  },
+})
+```
+
+Even without `onWAFInit`, every failed request now logs the original
+error message + stack via `console.error`, and the synthesized 503
+`Interruption.data` reads `WAF init failed: <original message>` so
+operators can see the real cause in their access logs.
+
 ### Body handling
 
 The runner reads the request body via `req.arrayBuffer()` before
