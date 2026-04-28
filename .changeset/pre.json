@@ -41,6 +41,7 @@
     "org-transfer",
     "rxmatch-fastpath",
     "skip-predicate-compound-extensions",
+    "unified-ignore-config",
     "upstream-bump-20260422",
     "wasm-loader-bundler-fallback",
     "wasm-loader-url-class-identity"
