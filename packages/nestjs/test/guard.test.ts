@@ -369,4 +369,37 @@ describe('CorazaGuard', () => {
     ).rejects.toThrow(HttpException)
     expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
   })
+
+  // Issue #29 — onWAFError function form: counters + honored verdict.
+  it('issue #29: onWAFError function form receives counters and honors verdict', async () => {
+    const { waf } = mockWAF('block')
+    const realNew = waf.newTransaction.bind(waf)
+    waf.newTransaction = () => {
+      const tx = realNew()
+      tx.processRequestBundle = () => {
+        throw new Error('synthetic')
+      }
+      return tx
+    }
+    const calls: Array<{ consecutiveErrors: number; totalErrors: number; since: Date }> = []
+    const guard = new CorazaGuard(waf, {
+      onWAFError: (_err, c) => {
+        calls.push({ ...c })
+        return c.consecutiveErrors <= 2 ? 'block' : 'allow'
+      },
+    })
+    // First 2 calls block (HttpException), 3rd allows (returns true).
+    await expect(
+      guard.canActivate(ctx({ method: 'GET', url: '/', headers: {}, socket: {} })),
+    ).rejects.toThrow(HttpException)
+    await expect(
+      guard.canActivate(ctx({ method: 'GET', url: '/', headers: {}, socket: {} })),
+    ).rejects.toThrow(HttpException)
+    const ok = await guard.canActivate(
+      ctx({ method: 'GET', url: '/', headers: {}, socket: {} }),
+    )
+    expect(ok).toBe(true)
+    expect(calls.map((c) => c.consecutiveErrors)).toEqual([1, 2, 3])
+    expect(calls[0]!.since.getTime()).toBe(calls[2]!.since.getTime())
+  })
 })
