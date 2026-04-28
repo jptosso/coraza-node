@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   recommended,
   balanced,
@@ -7,6 +7,7 @@ import {
   excludeByTag,
   excludeCategory,
   paranoia,
+  __test,
 } from '../src/index.js'
 
 describe('recommended()', () => {
@@ -185,6 +186,137 @@ describe('low-level helpers', () => {
     expect(excludeCategory('scanner-detection')).toBe('SecRuleRemoveById 910000-913999')
     expect(excludeCategory('dos-protection')).toBe('SecRuleRemoveById 912000-912999')
     expect(excludeCategory('outbound-data-leak')).toBe('SecRuleRemoveById 950000-950999')
+  })
+})
+
+describe('recommended() — extra id-collision validation (issue #30)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('throws when extra reuses an id emitted by recommended() (900001)', () => {
+    expect(() =>
+      recommended({
+        extra:
+          'SecAction "id:900001,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=10"',
+      }),
+    ).toThrow(/rule id 900001 in `extra` collides with the recommended\(\) preset/)
+  })
+
+  it('error message names the colliding id and the option to use instead', () => {
+    let caught: Error | null = null
+    try {
+      recommended({
+        extra:
+          'SecAction "id:900001,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=10"',
+      })
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught).not.toBeNull()
+    expect(caught!.message).toContain('900001')
+    expect(caught!.message).toContain('tx.inbound_anomaly_score_threshold')
+    expect(caught!.message).toContain('inboundAnomalyScoreThreshold')
+  })
+
+  it('throws on collision with id 900000 (paranoia)', () => {
+    expect(() =>
+      recommended({
+        extra: 'SecAction "id:900000,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=4"',
+      }),
+    ).toThrow(/rule id 900000/)
+  })
+
+  it('throws on collision with 900003 only when it is actually emitted (anomalyBlock=false)', () => {
+    // anomalyBlock=true (default): 900003 is NOT emitted, so it should NOT throw —
+    // it falls into the "warn" path below.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() =>
+      recommended({
+        extra: 'SecAction "id:900003,phase:1,nolog,pass,t:none,setvar:tx.early_blocking=0"',
+      }),
+    ).not.toThrow()
+    warn.mockRestore()
+
+    // anomalyBlock=false: 900003 IS emitted, so it must throw.
+    expect(() =>
+      recommended({
+        anomalyBlock: false,
+        extra: 'SecAction "id:900003,phase:1,nolog,pass,t:none,setvar:tx.early_blocking=0"',
+      }),
+    ).toThrow(/rule id 900003/)
+  })
+
+  it('warns (does not throw) for ids in 900000-999999 that recommended() does not emit', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() =>
+      recommended({
+        extra:
+          'SecAction "id:950000,phase:1,nolog,pass,t:none,setvar:tx.foo=1"',
+      }),
+    ).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toContain('950000')
+    expect(warn.mock.calls[0]?.[0]).toContain('CRS-reserved')
+  })
+
+  it('passes silently for ids >= 1,000,000 (the documented user range)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() =>
+      recommended({
+        extra: 'SecRule REQUEST_URI "@contains /admin" "id:1000000,deny,status:403"',
+      }),
+    ).not.toThrow()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('extra: "" passes without scanning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() => recommended({ extra: '' })).not.toThrow()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('extra: undefined passes without scanning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() => recommended({})).not.toThrow()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('id token regex tolerates whitespace and trailing comma', () => {
+    expect(__test.extractRuleIds('id : 900001 ,phase:1')).toEqual([900001])
+    expect(__test.extractRuleIds('"id:1234,phase:1"')).toEqual([1234])
+    expect(__test.extractRuleIds('  id:42 ')).toEqual([42])
+  })
+
+  it('id token regex does not mis-parse 9000010 as 900001 (boundary)', () => {
+    // Critical: substring matching would falsely trigger a collision on
+    // legal id 9000010. The regex must match whole-id only.
+    expect(__test.extractRuleIds('SecAction "id:9000010,phase:1"')).toEqual([
+      9000010,
+    ])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() =>
+      recommended({
+        extra: 'SecAction "id:9000010,phase:1,nolog,pass,t:none,setvar:tx.x=1"',
+      }),
+    ).not.toThrow()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('does not match `id:` inside an unrelated identifier (e.g. `myid:900001`)', () => {
+    // The leading non-ident-char guard means `myid:900001` should not parse
+    // as a rule id. (It's not valid SecLang anyway, but the regex must be
+    // robust against incidental substrings.)
+    expect(__test.extractRuleIds('myid:900001')).toEqual([])
+  })
+
+  it('extracts multiple ids and reports the first collision found', () => {
+    expect(() =>
+      recommended({
+        extra:
+          'SecRule REQUEST_URI "@contains /a" "id:1000001,deny"\nSecAction "id:900002,phase:1,nolog,pass,t:none,setvar:tx.outbound_anomaly_score_threshold=99"',
+      }),
+    ).toThrow(/rule id 900002/)
   })
 })
 
