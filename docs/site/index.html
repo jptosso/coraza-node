@@ -23,7 +23,7 @@
         </svg>
       </span>
       <span class="brand-name">coraza<span class="brand-dim">/node</span></span>
-      <span class="brand-ver">v0.1.0</span>
+      <span class="brand-ver">v0.1.0-preview.3</span>
     </a>
 
     <nav class="topnav" aria-label="Primary">
@@ -100,10 +100,10 @@
       <p class="lede">OWASP Coraza is a full-featured web application firewall. <span class="lede-accent">coraza-node</span> ships it as a plain npm package — the engine compiles to WebAssembly via TinyGo, so there's no sidecar, no native build step. Drop an adapter into your server and you have CRS protection in front of every request.</p>
 
       <div class="hero-pills">
-        <span class="pill"><span class="pill-k">npm</span><code>@coraza/core</code></span>
+        <span class="pill"><span class="pill-k">npm</span><code>@coraza/core@0.1.0-preview.3</code></span>
         <span class="pill"><span class="pill-k">runtime</span>Node ≥ 22</span>
         <span class="pill"><span class="pill-k">engine</span>Coraza v3 · WASM</span>
-        <span class="pill"><span class="pill-k">ruleset</span>CRS 4.10 bundled</span>
+        <span class="pill"><span class="pill-k">ruleset</span>CRS 4.25 bundled</span>
         <span class="pill pill-ok"><span class="pill-k">license</span>Apache-2.0</span>
       </div>
 
@@ -212,16 +212,18 @@
 
         <div class="installer-terminal">
           <pre class="installer-multi" id="installerMulti" aria-label="Install commands"><code><span class="c-c"># pnpm</span>
-pnpm add <span class="c-s" data-installer-pkg>@coraza/express</span> @coraza/core @coraza/coreruleset
+pnpm add <span class="c-s" data-installer-pkg>@coraza/express</span>@preview @coraza/core@preview @coraza/coreruleset@preview
 
 <span class="c-c"># npm</span>
-npm install <span class="c-s" data-installer-pkg>@coraza/express</span> @coraza/core @coraza/coreruleset
+npm install <span class="c-s" data-installer-pkg>@coraza/express</span>@preview @coraza/core@preview @coraza/coreruleset@preview
 
 <span class="c-c"># yarn</span>
-yarn add <span class="c-s" data-installer-pkg>@coraza/express</span> @coraza/core @coraza/coreruleset
+yarn add <span class="c-s" data-installer-pkg>@coraza/express</span>@preview @coraza/core@preview @coraza/coreruleset@preview
 
 <span class="c-c"># bun</span>
-bun add <span class="c-s" data-installer-pkg>@coraza/express</span> @coraza/core @coraza/coreruleset</code></pre>
+bun add <span class="c-s" data-installer-pkg>@coraza/express</span>@preview @coraza/core@preview @coraza/coreruleset@preview
+
+<span class="c-c"># or pin: @0.1.0-preview.3 (core/express/fastify/next/nestjs); @0.1.0-preview.2 (coreruleset)</span></code></pre>
         </div>
       </div>
     </section>
@@ -275,23 +277,18 @@ app.<span class="c-f">listen</span>(<span class="c-n">3000</span>)</code></pre><
 app.<span class="c-f">get</span>(<span class="c-s">'/'</span>, <span class="c-k">async</span> () =&gt; ({ ok: <span class="c-n">true</span> }))
 <span class="c-k">await</span> app.<span class="c-f">listen</span>({ port: <span class="c-n">3000</span> })</code></pre></div>
 
-        <div class="tab-panel" data-tab="next" hidden><pre class="code"><code><span class="c-c">// middleware.ts</span>
-<span class="c-k">import</span> os <span class="c-k">from</span> <span class="c-s">'node:os'</span>
-<span class="c-k">import</span> { createWAFPool } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
+        <div class="tab-panel" data-tab="next" hidden><pre class="code"><code><span class="c-c">// Next 16: src/proxy.ts        Next 15: src/middleware.ts</span>
+<span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
 <span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/next'</span>
 <span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
 
-<span class="c-k">const</span> wafPromise = <span class="c-f">createWAFPool</span>({
-  rules: <span class="c-f">recommended</span>(),
-  mode: <span class="c-s">'block'</span>,
-  size: os.<span class="c-f">availableParallelism</span>(),
-})
-<span class="c-k">export const</span> middleware = <span class="c-f">coraza</span>({ waf: wafPromise })
+<span class="c-k">const</span> waf = <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> })
 
-<span class="c-k">export const</span> config = {
-  matcher: <span class="c-s">'/:path*'</span>,
-  runtime: <span class="c-s">'nodejs'</span>,
-}</code></pre></div>
+<span class="c-c">// Next 16:  export const proxy      (proxy.ts; runtime defaults to nodejs)</span>
+<span class="c-c">// Next 15:  export const middleware (middleware.ts; runtime: 'nodejs' below)</span>
+<span class="c-k">export const</span> proxy = <span class="c-f">coraza</span>({ waf })
+
+<span class="c-k">export const</span> config = { matcher: <span class="c-s">'/:path*'</span> }</code></pre></div>
 
         <div class="tab-panel" data-tab="nestjs" hidden><pre class="code"><code><span class="c-c">// app.module.ts</span>
 <span class="c-k">import</span> os <span class="c-k">from</span> <span class="c-s">'node:os'</span>
@@ -344,7 +341,9 @@ app.<span class="c-f">get</span>(<span class="c-s">'/'</span>, <span class="c-k"
   mode?: <span class="c-s">'detect'</span> | <span class="c-s">'block'</span>
   <span class="c-c">/** Custom logger. Defaults to console. */</span>
   logger?: Logger
-  <span class="c-c">/** Override the embedded WASM binary (tests / custom builds). */</span>
+  <span class="c-c">/** Override the embedded WASM binary (tests / custom builds only —
+   *  the default loader is bundler-resilient and handles Next 15 / Turbopack
+   *  rewriting `import.meta.url`. No override required in normal apps. */</span>
   wasmSource?: ArrayBufferLike | Uint8Array | URL | <span class="c-k">string</span>
 }</code></pre>
         </details>
@@ -492,8 +491,9 @@ app.<span class="c-f">get</span>(<span class="c-s">'/'</span>, <span class="c-k"
   onBlock?: (i: Interruption, req: Request, res: Response) =&gt; <span class="c-k">void</span>
   <span class="c-c">/** Run response-phase rules too. Default false. */</span>
   inspectResponse?: <span class="c-k">boolean</span>
-  <span class="c-c">/** Bypass WAF for static/media paths. Defaults are safe; see skip.ts. */</span>
-  skip?: SkipOptions | <span class="c-k">false</span>
+  <span class="c-c">/** Unified bypass spec — extensions, routes, methods, body cutoff, header
+   *  equality, custom predicate. See "Skipping the WAF" below. */</span>
+  ignore?: IgnoreSpec | <span class="c-k">false</span>
   <span class="c-c">/** WAF error behavior. Default 'block' — fail-closed. */</span>
   onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
 }</code></pre>
@@ -511,7 +511,7 @@ app.<span class="c-f">get</span>(<span class="c-s">'/'</span>, <span class="c-k"
 
 app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({
   waf,
-  skip: { prefixes: [<span class="c-s">'/health'</span>, <span class="c-s">'/metrics'</span>] },
+  ignore: { routes: [<span class="c-s">'/health*'</span>, <span class="c-s">'/metrics*'</span>] },
   onBlock(it, req, res) {
     metrics.<span class="c-f">inc</span>(<span class="c-s">'waf.blocked'</span>, { ruleId: it.ruleId })
     res.<span class="c-f">status</span>(it.status || <span class="c-n">403</span>).<span class="c-f">json</span>({
@@ -521,6 +521,23 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({
     })
   },
 }))</code></pre>
+
+        <h4 class="h4">Skipping the WAF — <code>ignore</code></h4>
+        <p>Pass <code>ignore:</code> to declare which requests bypass Coraza. Every field is optional; combine freely. Identical shape across every adapter.</p>
+        <table class="err-table">
+          <thead><tr><th>Field</th><th>Type</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>extensions</code></td><td><code>string[]</code></td><td><code>['css','js','min.js']</code></td></tr>
+            <tr><td><code>routes</code></td><td><code>(string | RegExp)[]</code></td><td><code>['/static/*', /^\/internal\//]</code></td></tr>
+            <tr><td><code>methods</code></td><td><code>string[]</code></td><td><code>['OPTIONS','HEAD']</code></td></tr>
+            <tr><td><code>bodyLargerThan</code></td><td><code>number</code> (bytes)</td><td><code>10_000_000</code></td></tr>
+            <tr><td><code>headerEquals</code></td><td><code>Record&lt;string, string | string[]&gt;</code></td><td><code>{ 'x-internal': 'true' }</code></td></tr>
+            <tr><td><code>match</code></td><td><code>(ctx) =&gt; boolean | 'skip-body'</code></td><td>custom predicate, sync only</td></tr>
+            <tr><td><code>skipDefaults</code></td><td><code>boolean</code></td><td><code>true</code> drops the built-in extension list</td></tr>
+          </tbody>
+        </table>
+        <p>Verdicts: <code>false</code> (inspect), <code>true</code> (skip everything), <code>'skip-body'</code> (inspect URL + headers, skip the body phase). When both declarative rules and <code>match</code> produce a verdict, <strong>most-restrictive wins</strong>: <code>false &gt; 'skip-body' &gt; true</code>.</p>
+        <p>The legacy <code>skip:</code> option is soft-deprecated for one preview, mapped to <code>ignore:</code> at construction with a one-shot warning per process, and removed at stable 0.1.</p>
       </article>
     </section>
 
@@ -547,7 +564,7 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({
   waf: WAF | WAFPool
   onBlock?: (i: Interruption, req: FastifyRequest, reply: FastifyReply) =&gt; <span class="c-k">void</span> | Promise&lt;<span class="c-k">void</span>&gt;
   inspectResponse?: <span class="c-k">boolean</span>
-  skip?: SkipOptions | <span class="c-k">false</span>
+  ignore?: IgnoreSpec | <span class="c-k">false</span>
   onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
 }</code></pre>
         </details>
@@ -577,7 +594,7 @@ app.<span class="c-f">register</span>(<span class="c-k">async</span> (api) =&gt;
       <div class="adapter-head">
         <span class="adapter-chip">adapter</span>
         <h2 class="h2">Next.js · <code>@coraza/next</code></h2>
-        <p class="adapter-sub">Middleware for the Node runtime (Edge runtime lacks WASI). App Router and Pages Router.</p>
+        <p class="adapter-sub">Next 15 (<code>middleware.ts</code> + <code>runtime: 'nodejs'</code>) or Next 16 (<code>proxy.ts</code>). Edge runtime lacks WASI; Next 14 is intentionally unsupported. App Router and Pages Router.</p>
       </div>
 
       <div class="callout callout-dim">
@@ -614,12 +631,12 @@ app.<span class="c-f">register</span>(<span class="c-k">async</span> (api) =&gt;
 <span class="c-k">interface</span> CorazaNextOptions {
   waf: WAF | WAFPool | Promise&lt;WAF | WAFPool&gt;
   onBlock?: (i: Interruption, req: NextRequest) =&gt; Response
-  skip?: SkipOptions | <span class="c-k">false</span>
+  ignore?: IgnoreSpec | <span class="c-k">false</span>
   onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
 }</code></pre>
         </details>
 
-        <h4 class="h4">Example — middleware.ts</h4>
+        <h4 class="h4">Example — Next 16 <code>proxy.ts</code></h4>
 <pre class="code"><code><span class="c-k">import</span> { createWAF } <span class="c-k">from</span> <span class="c-s">'@coraza/core'</span>
 <span class="c-k">import</span> { coraza } <span class="c-k">from</span> <span class="c-s">'@coraza/next'</span>
 <span class="c-k">import</span> { recommended } <span class="c-k">from</span> <span class="c-s">'@coraza/coreruleset'</span>
@@ -627,7 +644,7 @@ app.<span class="c-f">register</span>(<span class="c-k">async</span> (api) =&gt;
 
 <span class="c-k">const</span> waf = <span class="c-f">createWAF</span>({ rules: <span class="c-f">recommended</span>(), mode: <span class="c-s">'block'</span> })
 
-<span class="c-k">export const</span> middleware = <span class="c-f">coraza</span>({
+<span class="c-k">export const</span> proxy = <span class="c-f">coraza</span>({
   waf,
   onBlock(it) {
     <span class="c-k">return</span> NextResponse.<span class="c-f">json</span>(
@@ -637,10 +654,13 @@ app.<span class="c-f">register</span>(<span class="c-k">async</span> (api) =&gt;
   },
 })
 
+<span class="c-c">// Next 16's proxy.ts defaults to the Node.js runtime — `runtime: 'nodejs'`
+// is rejected here. Use this exact shape on Next 15 in middleware.ts and
+// add `runtime: 'nodejs'` to the config object.</span>
 <span class="c-k">export const</span> config = {
   matcher: [<span class="c-s">'/((?!_next/static|_next/image|favicon.ico).*)'</span>],
-  runtime: <span class="c-s">'nodejs'</span>,
 }</code></pre>
+        <p>Live examples: <a href="https://github.com/coraza-incubator/coraza-node/tree/main/examples/next15-app">examples/next15-app</a> (Next 15 + middleware.ts) and <a href="https://github.com/coraza-incubator/coraza-node/tree/main/examples/next16-app">examples/next16-app</a> (Next 16 + proxy.ts).</p>
       </article>
     </section>
 
@@ -668,7 +688,7 @@ app.<span class="c-f">register</span>(<span class="c-k">async</span> (api) =&gt;
 
 <span class="c-k">interface</span> CorazaNestOptions <span class="c-k">extends</span> WAFConfig {
   globalGuard?: <span class="c-k">boolean</span>           <span class="c-c">// default true</span>
-  skip?: SkipOptions | <span class="c-k">false</span>
+  ignore?: IgnoreSpec | <span class="c-k">false</span>
   onBlock?: (i: Interruption) =&gt; HttpException
   onWAFError?: <span class="c-s">'allow'</span> | <span class="c-s">'block'</span>
 }</code></pre>
@@ -755,9 +775,9 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFErr
             <td>Fields clip at the UTF-8 boundary. Throwing into the adapter's catch path would turn a crafted-oversized request into a bypass; clipping keeps the request evaluated.</td>
           </tr>
           <tr>
-            <td><code>skip</code></td>
+            <td><code>ignore</code></td>
             <td>/_next/static, /public/, images, fonts, …</td>
-            <td>Static assets have no user input — evaluating them is pure cost. Customize via <code>skip.prefixes</code> / <code>skip.extensions</code>.</td>
+            <td>Static assets have no user input — evaluating them is pure cost. Customize via <code>ignore.routes</code> / <code>ignore.extensions</code> (legacy <code>skip:</code> still mapped, removed at stable 0.1).</td>
           </tr>
         </tbody>
       </table>
@@ -839,7 +859,7 @@ app.<span class="c-f">use</span>(<span class="c-f">coraza</span>({ waf, onWAFErr
       <div class="foot-row">
         <div>
           <div class="foot-title">coraza-node</div>
-          <div class="foot-sub">Apache-2.0 · v0.1.0 · By Juan Pablo Tosso — <a href="mailto:pablo@owasp.org">pablo@owasp.org</a></div>
+          <div class="foot-sub">Apache-2.0 · v0.1.0-preview.3 · By Juan Pablo Tosso — <a href="mailto:pablo@owasp.org">pablo@owasp.org</a></div>
         </div>
         <div class="foot-links">
           <a href="#overview">Top ↑</a>

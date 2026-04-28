@@ -21,7 +21,9 @@ app.use(coraza({ waf }))
 ```
 
 Options: `{ waf, onBlock?, onWAFError?, ignore?, inspectResponse? }`.
-Both request and response phases run; fails closed by default on WAF
+Request phases (1 + 2) always run; the response phase is opt-in via
+`inspectResponse: true` (off by default — doubles per-request work and
+only matters when you have response-side rules). Fails closed on WAF
 errors (override with `onWAFError: 'allow'`).
 
 ## Skipping the WAF

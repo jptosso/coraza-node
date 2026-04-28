@@ -29,6 +29,29 @@ the driver.
 - **After a Next.js major bump.** Next 14 → 15 → 16 each changed one or
   more of: middleware default runtime, filename (`middleware.ts` →
   `proxy.ts`), `src/` layout handling, `runtime` config acceptability.
+  Currently-shipped cases cover Next 15 (middleware ± Turbopack) and
+  Next 16 (proxy ± Turbopack); Next 14 is intentionally absent — the
+  `@coraza/next` peer-deps are `^15 || ^16`.
+
+## Cases shipped
+
+Ten cases are currently covered, exercised in both single-WAF and pool
+modes (20 legs total):
+
+- `express4`, `express5` — Express 4 / 5 + `@coraza/express`
+- `fastify5` — Fastify 5 + `@coraza/fastify`
+- `nestjs11` — NestJS 11 + `@coraza/nestjs` (NestJS 10 has an
+  `instanceof HttpException` class-identity bug under pnpm and is not
+  supported)
+- `next15-middleware`, `next15-middleware-turbopack` — Next 15 +
+  `middleware.ts` (with and without Turbopack)
+- `next16-proxy`, `next16-proxy-turbopack` — Next 16 + `proxy.ts`
+- `plain-cjs`, `plain-esm` — bare Node, no framework — `@coraza/core`
+  alone, both module formats
+
+CI also fans out across npm + yarn + pnpm install paths and runs
+selected legs on macOS and Windows; the bench gate and the published
+tarball smoke test are sibling jobs in `.github/workflows/`.
 
 ## Running locally
 

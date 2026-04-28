@@ -32,8 +32,8 @@ Plus the existing benchmark/FTW routes: `/`, `/healthz`, `/search`,
 ## Verify the WAF protects each surface
 
 Start the server (`PORT=3001 pnpm -F @coraza/example-express dev`) and
-fire each pair below. Benign should return 200 (or 200/echoed for WS),
-malicious should return 403 (or block the WS upgrade).
+fire each pair below. Benign should return 200, malicious should return
+403.
 
 ```sh
 # JSON

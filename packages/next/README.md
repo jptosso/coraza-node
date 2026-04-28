@@ -7,9 +7,12 @@ Node runtime only — the Edge runtime lacks WASI.
 
 | Next | File            | Runtime opt-in    | WASM loader path |
 | ---- | --------------- | ----------------- | ---------------- |
-| 14   | `middleware.ts` | `runtime:'nodejs'`| `new URL(..., import.meta.url)` works directly. |
-| 15   | `middleware.ts` | `runtime:'nodejs'`| Next 15 rewrites `import.meta.url` to a sentinel; `@coraza/core` falls back through `createRequire` automatically. No user action. |
+| 15   | `middleware.ts` | `runtime:'nodejs'`| Next 15's middleware bundler rewrites `import.meta.url` to a sentinel; `@coraza/core` falls back through `createRequire` automatically. No user action. |
 | 16   | `proxy.ts`      | none — rejected   | `import.meta.url` is preserved; default path works directly. |
+
+Peer-deps: `next: ^15 || ^16`. Next 14 is intentionally unsupported —
+its middleware ran on the Edge runtime by default, which lacks WASI and
+cannot host the Coraza WASM.
 
 Example apps in this repo covering both filename conventions:
 
@@ -19,8 +22,8 @@ Example apps in this repo covering both filename conventions:
 ## Quick start
 
 ```ts
-// Next 16+:   src/proxy.ts          (file renamed in Next 16)
-// Next 14/15: src/middleware.ts     (or middleware.ts at repo root)
+// Next 16: src/proxy.ts             (file renamed in Next 16)
+// Next 15: src/middleware.ts        (or middleware.ts at repo root)
 import { createWAF } from '@coraza/core'
 import { coraza } from '@coraza/next'
 import { recommended } from '@coraza/coreruleset'
@@ -38,7 +41,7 @@ export const config = { matcher: '/:path*' }
 > **Next 16:** do **not** set `runtime: 'nodejs'` on the `config` export —
 > Next 16's `proxy.ts` defaults to the Node.js runtime and rejects the
 > option outright (`The runtime config option is not available in Proxy
-> files`). On Next 14/15 the option is accepted and required to pin
+> files`). On Next 15 the option is accepted and required to pin
 > middleware off the Edge runtime.
 
 ## Known bundler quirks
