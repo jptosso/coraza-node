@@ -15,7 +15,9 @@ the WASM via [`coraza-coreruleset`](https://github.com/corazawaf/coraza-corerule
 
 - Docs site: **[coraza-incubator.github.io/coraza-node](https://coraza-incubator.github.io/coraza-node)**
 - Live Express demo on Vercel: **[coraza-node-express-app.vercel.app](https://coraza-node-express-app.vercel.app/)**
-  (try `?q=%27+OR+1%3D1--` to see CRS block a SQLi payload)
+  (try `?q=%27+OR+1%3D1--` to see CRS block a SQLi payload). Source:
+  [jptosso/coraza-node-example-express](https://github.com/jptosso/coraza-node-example-express).
+- Current preview on npm: `0.1.0-preview.3` (or `@preview` dist-tag).
 
 ## Packages
 
@@ -78,16 +80,21 @@ under 50-VU mixed traffic. Detail + tuning knobs:
 
 ## Adapter caveat — Next.js
 
-Supported on Next.js 14, 15, and 16. Each version uses a different
-middleware filename and bundler — the adapter handles them uniformly,
-but see the table in [`packages/next/README.md`](./packages/next/README.md)
-for the exact filename / runtime-option / WASM-loader combination per
-version. Live examples:
+Supported on Next.js 15 and 16. Each version uses a different middleware
+filename and bundler — the adapter handles them uniformly, but see the
+table in [`packages/next/README.md`](./packages/next/README.md) for the
+exact filename / runtime-option / WASM-loader combination per version.
+Live examples:
 
 - [`examples/next15-app/`](./examples/next15-app/) — Next 15 +
   `middleware.ts` (`runtime: 'nodejs'`).
 - [`examples/next16-app/`](./examples/next16-app/) — Next 16 +
   `proxy.ts`.
+
+The default WASM loader is bundler-resilient — Next 15's middleware
+bundler (and Turbopack) rewrite `import.meta.url` to a sentinel, but
+`@coraza/core` falls back through `createRequire` automatically. No
+`wasmSource:` override is required in your `middleware.ts` / `proxy.ts`.
 
 Next's middleware / proxy runs on the **request boundary only**. Route
 Handlers own the `Response`, and Next's runtime doesn't expose the

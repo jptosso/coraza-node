@@ -158,9 +158,13 @@ non-negotiable.
    don't pay the serialization cost when rules don't care.
 5. **Short-circuit on engine off**. First thing every adapter does after
    `newTransaction()` is check `tx.isRuleEngineOff()`.
-6. **Static/media bypass is first-class**. The `skip` option on every adapter
-   defaults to bypassing images, CSS, JS, fonts, common static prefixes. See
-   `packages/core/src/skip.ts`.
+6. **Static/media bypass is first-class**. The unified `ignore:` option on
+   every adapter (`{ extensions, routes, methods, bodyLargerThan,
+   headerEquals, match, skipDefaults }`) defaults to bypassing images, CSS,
+   JS, fonts, and common static-mount routes. See
+   `packages/core/src/ignore.ts`. The legacy `skip:` shape is mapped to
+   `ignore:` at construction with a one-shot deprecation warning per process
+   and removed at stable 0.1.
 7. **Default mode is `detect`, not `block`**. Safer first-run experience.
    Users flip to `block` once they've reviewed false positives.
 8. **`inspectResponse` is off by default**. Doubles per-request work; only
@@ -412,8 +416,11 @@ a failure is framework noise or an engine regression.
 | Coraza engine behavior | `wasm/main.go` + `wasm/ABI.md` + TS ABI types |
 | A new WAF config option | `packages/core/src/types.ts` + `src/waf.ts` + adapters |
 | Framework adapter behavior | `packages/<adapter>/src/index.ts` + its tests |
-| Static-file bypass logic | `packages/core/src/skip.ts` (NOT per-adapter) |
+| WAF bypass / `ignore:` semantics | `packages/core/src/ignore.ts` (NOT per-adapter). Legacy `skip:` shape lives in `skip.ts` for one-preview back-compat and is mapped via `skipToIgnore`. |
 | CRS profile preset | `packages/coreruleset/src/index.ts` |
+| Bundler/framework compat case | `testing/matrix/cases/<name>/` + register in `.github/workflows/matrix.yml` and `scripts/run-local.sh` |
+| Cross-OS / npm+yarn / tarball CI | `.github/workflows/{matrix,bench,tarball-smoke}.yml` (cross-OS runners, bench gate, npm/yarn legs, tarball smoke) |
+| Example app (Express/Fastify/Next15/Next16/NestJS) | `examples/<name>-app/` — every app implements the shared HTTP contract from `examples/shared/` |
 | CI / release workflow | `.github/workflows/*.yml` |
 | FTW corpus / overrides | `testing/ftw/*` + `.github/workflows/ftw.yml` |
 | Docs an agent will read | THIS FILE. Not a new doc. |

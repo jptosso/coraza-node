@@ -28,6 +28,10 @@ pre-handler, so CRS's `RESPONSE-*` rules (response-body leak
 detection) aren't exercised — same inbound-only shape as Next's
 middleware limitation.
 
+Peer-deps: `@nestjs/common: ^11`, `@nestjs/core: ^11`. NestJS 10 is
+intentionally unsupported — under pnpm it has an `instanceof
+HttpException` class-identity bug that breaks the guard's block path.
+
 ## Skipping the WAF
 
 Pass `ignore:` to declare which requests bypass Coraza. Every field is
