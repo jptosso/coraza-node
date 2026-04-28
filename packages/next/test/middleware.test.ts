@@ -221,6 +221,96 @@ describe('@coraza/next', () => {
     const res = await mw(makeReq('https://example.com/', { method: 'POST' }))
     expect(res.headers.get('x-middleware-next')).toBe('1')
   })
+
+  it('ignore: { methods } skips configured methods entirely', async () => {
+    const { waf, state } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const mw = coraza({ waf, ignore: { methods: ['OPTIONS'] } })
+    const res = await mw(makeReq('https://example.com/api', { method: 'OPTIONS' }))
+    expect(res.headers.get('x-middleware-next')).toBe('1')
+    expect(state.nextTx).toBe(0)
+  })
+
+  it('ignore: { routes } supports glob routes', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const mw = coraza({ waf, ignore: { routes: ['/healthz'] } })
+    const res = await mw(makeReq('https://example.com/healthz'))
+    expect(res.headers.get('x-middleware-next')).toBe('1')
+  })
+
+  it('ignore: { headerEquals } bypasses on matching header', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const mw = coraza({ waf, ignore: { headerEquals: { 'x-internal': 'true' } } })
+    const ok = await mw(
+      makeReq('https://example.com/api', { headers: { 'x-internal': 'true' } }),
+    )
+    expect(ok.headers.get('x-middleware-next')).toBe('1')
+    const blocked = await mw(makeReq('https://example.com/api'))
+    expect(blocked.status).toBe(403)
+  })
+
+  it('ignore: { bodyLargerThan } returns skip-body and the body is never read', async () => {
+    const { waf } = mockWAF('block', {
+      onBody: (tx) =>
+        tx.lastBody && tx.lastBody.length > 0
+          ? { ruleId: 941100, action: 'deny', status: 403, data: 'XSS' }
+          : undefined,
+    })
+    const mw = coraza({ waf, ignore: { bodyLargerThan: 100 } })
+    const big = 'x'.repeat(5000)
+    const req = makeReq('https://example.com/upload', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain', 'content-length': String(big.length) },
+      body: big,
+    })
+    const spy = vi.spyOn(req, 'arrayBuffer')
+    const res = await mw(req)
+    expect(res.headers.get('x-middleware-next')).toBe('1')
+    expect(spy).not.toHaveBeenCalled() // body skipped end-to-end
+  })
+
+  it('ignore: { match } most-restrictive overrides declarative skip', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const mw = coraza({
+      waf,
+      ignore: {
+        routes: ['/healthz'],
+        match: (ctx) =>
+          (ctx.headers as Headers).get('x-suspicious') === 'yes' ? false : true,
+      },
+    })
+    const allowed = await mw(makeReq('https://example.com/healthz'))
+    expect(allowed.headers.get('x-middleware-next')).toBe('1')
+    const blocked = await mw(
+      makeReq('https://example.com/healthz', { headers: { 'x-suspicious': 'yes' } }),
+    )
+    expect(blocked.status).toBe(403)
+  })
+
+  it('legacy skip: still maps to ignore: shape', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const mw = coraza({ waf, skip: { prefixes: ['/healthz'] } })
+    const res = await mw(makeReq('https://example.com/healthz'))
+    expect(res.headers.get('x-middleware-next')).toBe('1')
+  })
+
+  it('ignore: false disables bypass in next', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: () => ({ ruleId: 1, action: 'deny', status: 403, data: 'x' }),
+    })
+    const mw = coraza({ waf, ignore: false })
+    const png = await mw(makeReq('https://example.com/img/logo.png'))
+    expect(png.status).toBe(403)
+  })
 })
 
 // Compose-with-existing-proxy contract. The runner exposes a structured

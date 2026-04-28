@@ -30,8 +30,11 @@ import type {
   WorkerTransaction,
   Interruption,
   SkipOptions,
+  IgnoreSpec,
+  IgnoreContext,
+  IgnoreVerdict,
 } from '@coraza/core'
-import { buildSkipPredicate, pathOf } from '@coraza/core'
+import { buildIgnoreMatcher, skipToIgnore } from '@coraza/core'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 
 export interface CorazaFastifyOptions {
@@ -48,7 +51,12 @@ export interface CorazaFastifyOptions {
   ) => void | Promise<void>
   /** Run phase 3+4 on the response. Default false; see @coraza/express docs. */
   inspectResponse?: boolean
-  /** Bypass Coraza for static/media paths. See `SkipOptions`. */
+  /** Unified WAF-bypass spec. See README "Skipping the WAF". */
+  ignore?: IgnoreSpec | false
+  /**
+   * @deprecated Use `ignore:` instead. Mapped at construction with a
+   * one-shot deprecation warning. Removed at stable 0.1.
+   */
   skip?: SkipOptions | false
   /**
    * What to do if the WAF throws mid-request.
@@ -71,7 +79,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
     inspectResponse = false,
     onWAFError = 'block',
   } = opts
-  const shouldSkip = opts.skip === false ? () => false : buildSkipPredicate(opts.skip)
+  const matcher = resolveIgnoreMatcher(opts.ignore, opts.skip)
 
   // Resolve the (possibly deferred) WAF once, on plugin register — plugin
   // registration is already async so we can safely `await` here and every
@@ -85,7 +93,8 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
   // ensures CRS's anomaly evaluator at phase 2 always fires.
   fastify.addHook('preHandler', async (req, reply) => {
     if (reply.sent) return
-    if (shouldSkip(pathOf(req.url))) return
+    const verdict = matcher === null ? false : matcher(buildIgnoreCtx(req))
+    if (verdict === true) return
 
     let tx: AnyTx
     try {
@@ -109,6 +118,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
     try {
       if (await tx.isRuleEngineOff()) return
 
+      const body = verdict === 'skip-body' ? undefined : serializeBody(req.body)
       const interrupted = await tx.processRequestBundle(
         {
           method: req.method,
@@ -119,7 +129,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
           remotePort: req.socket.remotePort ?? 0,
           serverPort: req.socket.localPort ?? 0,
         },
-        serializeBody(req.body),
+        body,
       )
       if (interrupted) {
         const it = await tx.interruption()
@@ -250,5 +260,49 @@ async function emitBlock(
 }
 
 import { headersOf, serializeBody, payloadToBytes } from './helpers.js'
+
+let legacyWarnedFastify = false
+
+function resolveIgnoreMatcher(
+  ignore: IgnoreSpec | false | undefined,
+  skip: SkipOptions | false | undefined,
+): ((ctx: IgnoreContext) => IgnoreVerdict) | null {
+  if (ignore === false || skip === false) return null
+  if (ignore !== undefined) return buildIgnoreMatcher(ignore)
+  if (skip !== undefined && !legacyWarnedFastify) {
+    legacyWarnedFastify = true
+    // eslint-disable-next-line no-console
+    console.warn(
+      'coraza: the `skip:` option is deprecated and will be removed at stable 0.1; ' +
+        'migrate to `ignore: { extensions, routes, methods, bodyLargerThan, headerEquals, match }`.',
+    )
+  }
+  return buildIgnoreMatcher(skipToIgnore(skip))
+}
+
+function buildIgnoreCtx(req: FastifyRequest): IgnoreContext {
+  let url: URL
+  try {
+    url = new URL(req.url, 'http://x')
+  } catch {
+    /* c8 ignore next */
+    url = new URL('/', 'http://x')
+  }
+  const map = new Map<string, string>()
+  const h = req.headers as Record<string, string | string[] | undefined>
+  for (const k in h) {
+    const v = h[k]
+    if (v === undefined) continue
+    map.set(k, Array.isArray(v) ? v.join(',') : v)
+  }
+  const cl = h['content-length']
+  const clNum = typeof cl === 'string' ? Number(cl) : Array.isArray(cl) ? Number(cl[0]) : NaN
+  return Object.freeze({
+    method: req.method,
+    url,
+    headers: map,
+    contentLength: Number.isFinite(clNum) && clNum >= 0 ? clNum : null,
+  })
+}
 
 export type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'

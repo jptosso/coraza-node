@@ -21,8 +21,11 @@ import type {
   WorkerTransaction,
   Interruption,
   SkipOptions,
+  IgnoreSpec,
+  IgnoreContext,
+  IgnoreVerdict,
 } from '@coraza/core'
-import { buildSkipPredicate, pathOf } from '@coraza/core'
+import { buildIgnoreMatcher, skipToIgnore } from '@coraza/core'
 import { CORAZA_WAF, CORAZA_OPTIONS } from './tokens.js'
 
 type OnBlock = (interruption: Interruption) => HttpException
@@ -68,7 +71,7 @@ type AnyTx = Transaction | WorkerTransaction
 @Injectable()
 export class CorazaGuard implements CanActivate {
   private readonly logger = new Logger('CorazaGuard')
-  private readonly shouldSkip: (path: string) => boolean
+  private readonly matcher: ((ctx: IgnoreContext) => IgnoreVerdict) | null
   private readonly onWAFError: 'allow' | 'block'
   private readonly onBlock: OnBlock
 
@@ -76,12 +79,13 @@ export class CorazaGuard implements CanActivate {
     @Inject(CORAZA_WAF) private readonly waf: AnyWAF,
     @Inject(CORAZA_OPTIONS)
     opts: {
+      ignore?: IgnoreSpec | false
       skip?: SkipOptions | false
       onWAFError?: 'allow' | 'block'
       onBlock?: OnBlock
     } = {},
   ) {
-    this.shouldSkip = opts.skip === false ? () => false : buildSkipPredicate(opts.skip)
+    this.matcher = resolveIgnoreMatcher(opts.ignore, opts.skip)
     this.onWAFError = opts.onWAFError ?? 'block'
     this.onBlock = opts.onBlock ?? defaultOnBlock
   }
@@ -90,7 +94,8 @@ export class CorazaGuard implements CanActivate {
     const http = ctx.switchToHttp()
     const req = http.getRequest<HttpReq>()
 
-    if (this.shouldSkip(pathOf(req.originalUrl || req.url || '/'))) return true
+    const verdict = this.matcher === null ? false : this.matcher(buildIgnoreCtx(req))
+    if (verdict === true) return true
 
     let tx: AnyTx
     try {
@@ -117,6 +122,7 @@ export class CorazaGuard implements CanActivate {
       // Phases 1 and 2 run atomically via the fused bundle call so CRS's
       // anomaly evaluator at phase 2 always fires, including on body-less
       // GET requests. See docs/threat-model.md.
+      const body = verdict === 'skip-body' ? undefined : serializeBody(req.body)
       const interrupted = await tx.processRequestBundle(
         {
           method: req.method,
@@ -127,7 +133,7 @@ export class CorazaGuard implements CanActivate {
           remotePort: req.socket?.remotePort ?? 0,
           serverPort: req.socket?.localPort ?? 0,
         },
-        serializeBody(req.body),
+        body,
       )
       if (interrupted) interruption = await tx.interruption()
     } catch (err) {
@@ -194,6 +200,50 @@ function serializeBody(body: unknown): Uint8Array | undefined {
     }
   }
   return undefined
+}
+
+let legacyWarnedNest = false
+
+function resolveIgnoreMatcher(
+  ignore: IgnoreSpec | false | undefined,
+  skip: SkipOptions | false | undefined,
+): ((ctx: IgnoreContext) => IgnoreVerdict) | null {
+  if (ignore === false || skip === false) return null
+  if (ignore !== undefined) return buildIgnoreMatcher(ignore)
+  if (skip !== undefined && !legacyWarnedNest) {
+    legacyWarnedNest = true
+    // eslint-disable-next-line no-console
+    console.warn(
+      'coraza: the `skip:` option is deprecated and will be removed at stable 0.1; ' +
+        'migrate to `ignore: { extensions, routes, methods, bodyLargerThan, headerEquals, match }`.',
+    )
+  }
+  return buildIgnoreMatcher(skipToIgnore(skip))
+}
+
+function buildIgnoreCtx(req: HttpReq): IgnoreContext {
+  const raw = req.originalUrl || req.url || '/'
+  let url: URL
+  try {
+    url = new URL(raw, 'http://x')
+  } catch {
+    /* c8 ignore next */
+    url = new URL('/', 'http://x')
+  }
+  const map = new Map<string, string>()
+  for (const k in req.headers) {
+    const v = req.headers[k]
+    if (v === undefined) continue
+    map.set(k, Array.isArray(v) ? v.join(',') : v)
+  }
+  const cl = req.headers['content-length']
+  const clNum = typeof cl === 'string' ? Number(cl) : Array.isArray(cl) ? Number(cl[0]) : NaN
+  return Object.freeze({
+    method: req.method,
+    url,
+    headers: map,
+    contentLength: Number.isFinite(clNum) && clNum >= 0 ? clNum : null,
+  })
 }
 
 export { ForbiddenException }

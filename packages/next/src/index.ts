@@ -27,8 +27,11 @@ import type {
   WAFLike,
   Interruption,
   SkipOptions,
+  IgnoreSpec,
+  IgnoreContext,
+  IgnoreVerdict,
 } from '@coraza/core'
-import { buildSkipPredicate } from '@coraza/core'
+import { buildIgnoreMatcher, skipToIgnore } from '@coraza/core'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export interface CorazaNextOptions {
@@ -44,7 +47,12 @@ export interface CorazaNextOptions {
   // response body. CRS's RESPONSE-* families therefore can't fire on a
   // Next deployment. See README and docs/threat-model.md.
 
-  /** Bypass Coraza for static/media paths. Defaults skip /_next/static, etc. */
+  /** Unified WAF-bypass spec. See README "Skipping the WAF". */
+  ignore?: IgnoreSpec | false
+  /**
+   * @deprecated Use `ignore:` instead. Mapped at construction with a
+   * one-shot deprecation warning. Removed at stable 0.1.
+   */
   skip?: SkipOptions | false
   /**
    * What to do if the WAF throws mid-request. Default 'block' (fail
@@ -93,7 +101,7 @@ export function createCorazaRunner(
   options: CorazaNextOptions,
 ): (req: NextRequest) => Promise<CorazaDecision> {
   const { waf: wafOrPromise, onBlock = defaultBlock, onWAFError = 'block' } = options
-  const shouldSkip = options.skip === false ? () => false : buildSkipPredicate(options.skip)
+  const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
   let wafRef: AnyWAF | null = null
   const ensureWAF = async (): Promise<AnyWAF> => {
@@ -104,7 +112,8 @@ export function createCorazaRunner(
 
   return async function runCoraza(req: NextRequest): Promise<CorazaDecision> {
     const url = new URL(req.url)
-    if (shouldSkip(url.pathname)) return { allow: true }
+    const verdict = matcher === null ? false : matcher(buildIgnoreCtx(req, url))
+    if (verdict === true) return { allow: true }
 
     const waf = await ensureWAF()
     const log = waf.logger
@@ -129,8 +138,14 @@ export function createCorazaRunner(
       if (await tx.isRuleEngineOff()) return { allow: true }
 
       // Read the body up front (Next streams it); the bundle needs it
-      // to guarantee phase 2 runs.
-      const body = hasBody(req) ? new Uint8Array(await req.arrayBuffer()) : undefined
+      // to guarantee phase 2 runs. `'skip-body'` short-circuits the body
+      // read entirely so we don't pay to materialize an oversized payload.
+      const body =
+        verdict === 'skip-body'
+          ? undefined
+          : hasBody(req)
+            ? new Uint8Array(await req.arrayBuffer())
+            : undefined
 
       const interrupted = await tx.processRequestBundle(
         {
@@ -219,6 +234,36 @@ function hasBody(req: NextRequest): boolean {
   const len = req.headers.get('content-length')
   if (len !== null) return Number(len) > 0
   return req.headers.has('content-type')
+}
+
+let legacyWarnedNext = false
+
+function resolveIgnoreMatcher(
+  ignore: IgnoreSpec | false | undefined,
+  skip: SkipOptions | false | undefined,
+): ((ctx: IgnoreContext) => IgnoreVerdict) | null {
+  if (ignore === false || skip === false) return null
+  if (ignore !== undefined) return buildIgnoreMatcher(ignore)
+  if (skip !== undefined && !legacyWarnedNext) {
+    legacyWarnedNext = true
+    // eslint-disable-next-line no-console
+    console.warn(
+      'coraza: the `skip:` option is deprecated and will be removed at stable 0.1; ' +
+        'migrate to `ignore: { extensions, routes, methods, bodyLargerThan, headerEquals, match }`.',
+    )
+  }
+  return buildIgnoreMatcher(skipToIgnore(skip))
+}
+
+function buildIgnoreCtx(req: NextRequest, url: URL): IgnoreContext {
+  const cl = req.headers.get('content-length')
+  const clNum = cl !== null ? Number(cl) : NaN
+  return Object.freeze({
+    method: req.method,
+    url,
+    headers: req.headers,
+    contentLength: Number.isFinite(clNum) && clNum >= 0 ? clNum : null,
+  })
 }
 
 export { NextResponse } from 'next/server'
