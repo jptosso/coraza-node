@@ -3,20 +3,30 @@
 This directory holds the compatibility matrix that protects the repo
 from shipping "works here, fails in your Next 15 middleware" regressions.
 The matrix is a flat list of minimal consumer apps ("cases") that each
-install `@coraza/core` and one adapter, boot, and answer three HTTP
-assertions identically:
+install `@coraza/core` and one adapter, boot, and answer nine HTTP
+assertions identically — covering all three critical request body shapes
+(JSON, urlencoded, multipart) on every framework × bundler × pool combo:
 
 1. `GET /search?q=hello` → `200`
 2. `GET /search?q=<SQLi>` → `403`
-3. `POST /echo` with `{ msg: "<script>alert(1)</script>" }` → `403`
+3. `POST /echo` JSON `{ msg: <XSS> }` → `403`
+4. `POST /echo` JSON `{ q: "hello" }` → `200`
+5. `POST /echo` JSON `{ q: <SQLi> }` → `403`
+6. `POST /form` urlencoded `q=hello` → `200`
+7. `POST /form` urlencoded `q=<SQLi>` → `403`
+8. `POST /upload` multipart with file → `200`
+9. `POST /upload` multipart with file + SQLi field → `403`
 
-All cases expose the same four routes: `/healthz`, `/`, `/search`, and
-`POST /echo`. Each case boots its own WAF inline — the factory is five
-lines at the top of every entry point and honours `POOL=1`, `POOL_SIZE`,
-and `MODE` env vars. The only axis each case directory represents is
-**adapter × framework × module format × bundler** — everything else
-(Node version, pool vs single) is parameterised by the workflow and
-the driver.
+Every case exposes the same six routes: `/healthz`, `/`, `/search`,
+`POST /echo`, `POST /form`, `POST /upload`. Each case boots its own WAF
+inline and applies the same three-rule CRS tuning as
+`examples/express-app` — `SecRuleRemoveById 920420 / 920350 / 922110` —
+without which benign body-bearing POSTs cross the PL1 anomaly threshold
+on every framework and the matrix can't show a benign-vs-malicious
+split. Each case honours `POOL=1`, `POOL_SIZE`, and `MODE` env vars.
+The only axis each case directory represents is **adapter × framework
+× module format × bundler** — everything else (Node version, pool vs
+single) is parameterised by the workflow and the driver.
 
 ## When to run it
 
@@ -56,14 +66,17 @@ Every case directory must ship:
   `@coraza/core`, `@coraza/coreruleset`, and the adapter as workspace
   dependencies. Name prefix: `@coraza/matrix-<case>`.
 - An entry point (`src/server.ts`, `middleware.ts`, or `proxy.ts`) that
-  builds a WAF via `createWAF` / `createWAFPool` keyed off `POOL`.
+  builds a WAF via `createWAF` / `createWAFPool` keyed off `POOL`, with
+  the three-rule CRS tuning applied via `recommended({ extra: ... })`.
 - A `start` script that binds the server on `${PORT}`.
-- Four identical routes: `/healthz` (200 text), `/` (200 JSON),
+- Six identical routes: `/healthz` (200 text), `/` (200 JSON),
   `/search?q=` (200 JSON echoing `q` + `len`), `POST /echo` (200 JSON
-  echoing the body).
+  echoing the JSON body), `POST /form` (200 JSON echoing the
+  urlencoded body), and `POST /upload` (200 JSON listing field names
+  and uploaded file metadata).
 
 The driver (`scripts/check.mjs`) probes `/healthz` until it returns
-200, then fires the three assertions. Anything other than the expected
+200, then fires the nine assertions. Anything other than the expected
 status on any assertion fails the leg.
 
 ## Adding a new case
@@ -81,7 +94,7 @@ Three-step checklist:
    new directory up), then `CASES=<name> pnpm matrix` to confirm it
    passes locally.
 
-The three assertions are the contract. If the framework or runtime
+The nine assertions are the contract. If the framework or runtime
 can't satisfy them, the case should fail — that's exactly the signal
 we want. Don't soften the driver for a framework-specific quirk;
 either fix the adapter / core, or explicitly note in the PR that the

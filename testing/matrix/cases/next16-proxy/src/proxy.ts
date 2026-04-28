@@ -13,6 +13,16 @@ import { coraza } from '@coraza/next'
 const usePool = process.env.POOL === '1'
 const poolSize = Number(process.env.POOL_SIZE ?? 2)
 
+// Same three-rule disable as examples/express-app — without these the
+// inbound anomaly score crosses the PL1 threshold of 5 on every benign
+// body-bearing POST and the matrix can't show the benign/malicious split.
+const crsTuning = [
+  'SecRuleRemoveById 920420',
+  'SecRuleRemoveById 920350',
+  'SecRuleRemoveById 922110',
+].join('\n')
+const rules = recommended({ extra: crsTuning })
+
 const wasmPath = path.resolve(
   process.cwd(),
   '../../../../packages/core/src/wasm/coraza.wasm',
@@ -20,13 +30,13 @@ const wasmPath = path.resolve(
 
 const wafPromise = usePool
   ? createWAFPool({
-      rules: recommended(),
+      rules,
       mode: 'block',
       size: poolSize,
       wasmSource: wasmPath,
     })
   : createWAF({
-      rules: recommended(),
+      rules,
       mode: 'block',
       wasmSource: wasmPath,
     })

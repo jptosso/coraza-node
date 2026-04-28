@@ -4,10 +4,19 @@
 //
 // Contract (every case must honour):
 //
-//   GET  /healthz            → 200 (any body)
-//   GET  /search?q=hello     → 200                 (benign)
-//   GET  /search?q=<SQLi>    → 403                 (query-string SQLi)
-//   POST /echo { msg: XSS }  → 403                 (JSON body XSS)
+//   GET  /healthz                              → 200 (any body)
+//   GET  /search?q=hello                       → 200    (benign)
+//   GET  /search?q=<SQLi>                      → 403    (query-string SQLi)
+//   POST /echo   { msg: XSS }       JSON       → 403    (JSON body XSS)
+//   POST /echo   { q: "hello" }     JSON       → 200    (JSON benign)
+//   POST /echo   { q: SQLi }        JSON       → 403    (JSON SQLi)
+//   POST /form   q=hello           urlencoded  → 200    (form benign)
+//   POST /form   q=<SQLi>          urlencoded  → 403    (form SQLi)
+//   POST /upload <file>            multipart   → 200    (multipart benign)
+//   POST /upload <file>+q=<SQLi>   multipart   → 403    (multipart SQLi field)
+//
+// The three "JSON / form / multipart × benign / sqli" pairs are why the
+// matrix exists — they prove every adapter inspects every body shape.
 //
 // Env:
 //   CASE_PORT     port the case server is bound to (required)
@@ -16,7 +25,7 @@
 //   BOOT_TIMEOUT  seconds to wait for /healthz (default 45)
 //
 // Exit codes:
-//   0  — all four assertions passed
+//   0  — all assertions passed
 //   1  — one or more assertions failed (see stderr for a diff)
 //   2  — the case never became ready within BOOT_TIMEOUT
 
@@ -32,7 +41,8 @@ if (!PORT) {
 
 const base = `http://${HOST}:${PORT}`
 
-const SQLI = "'+OR+1=1--"
+const SQLI = "' OR 1=1--"
+const SQLI_QS = "'+OR+1=1--"
 const XSS = '<script>alert(1)</script>'
 
 async function waitForReady() {
@@ -51,26 +61,65 @@ async function waitForReady() {
   throw new Error(`[${NAME}] /healthz not ready after ${BOOT_TIMEOUT}s (last=${lastErr})`)
 }
 
-async function scenario(label, method, path, body, expectStatus) {
-  const init = { method, signal: AbortSignal.timeout(10_000) }
-  if (body !== undefined) {
-    init.headers = { 'content-type': 'application/json' }
-    init.body = JSON.stringify(body)
-  }
+async function run(label, init, path, expectStatus) {
+  init.signal = AbortSignal.timeout(15_000)
   const res = await fetch(`${base}${path}`, init).catch((err) => {
     throw new Error(`[${NAME}] ${label}: transport error — ${err.message || err}`)
   })
   // Drain the body so the server can shut down cleanly.
   await res.text().catch(() => '')
-  if (res.status !== expectStatus) {
-    return {
-      label,
-      ok: false,
-      actual: res.status,
-      expected: expectStatus,
-    }
+  return {
+    label,
+    ok: res.status === expectStatus,
+    actual: res.status,
+    expected: expectStatus,
   }
-  return { label, ok: true, actual: res.status, expected: expectStatus }
+}
+
+function jsonInit(payload) {
+  return {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }
+}
+
+function formInit(query) {
+  return {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: query,
+  }
+}
+
+// Hand-roll a multipart body so the request bytes are deterministic across
+// node versions. `fetch`'s built-in FormData encoder picks a random boundary
+// and orders parts in insertion order — fine, but spelling it out keeps
+// the WAF-visible payload identical between runs and frameworks.
+function multipartInit({ extraFields = {} } = {}) {
+  const boundary = '----matrixBoundary' + Math.random().toString(36).slice(2, 10)
+  const CRLF = '\r\n'
+  const parts = []
+  for (const [name, value] of Object.entries(extraFields)) {
+    parts.push(
+      `--${boundary}${CRLF}` +
+        `Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}` +
+        `${value}${CRLF}`,
+    )
+  }
+  parts.push(
+    `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="file"; filename="hello.txt"${CRLF}` +
+      `Content-Type: text/plain${CRLF}${CRLF}` +
+      `hello world${CRLF}`,
+  )
+  parts.push(`--${boundary}--${CRLF}`)
+  const body = Buffer.from(parts.join(''), 'utf8')
+  return {
+    method: 'POST',
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    body,
+  }
 }
 
 async function main() {
@@ -82,21 +131,38 @@ async function main() {
   }
 
   const results = []
-  results.push(await scenario('benign-search', 'GET', '/search?q=hello', undefined, 200))
+
+  // GET search.
+  results.push(await run('benign-search', { method: 'GET' }, '/search?q=hello', 200))
   results.push(
-    await scenario(
-      'sqli-search',
-      'GET',
-      `/search?q=${encodeURIComponent(SQLI)}`,
-      undefined,
+    await run('sqli-search', { method: 'GET' }, `/search?q=${encodeURIComponent(SQLI_QS)}`, 403),
+  )
+
+  // JSON.
+  results.push(await run('xss-echo', jsonInit({ msg: XSS }), '/echo', 403))
+  results.push(await run('json-benign', jsonInit({ q: 'hello' }), '/echo', 200))
+  results.push(await run('json-sqli', jsonInit({ q: SQLI }), '/echo', 403))
+
+  // urlencoded.
+  results.push(await run('form-benign', formInit('q=hello'), '/form', 200))
+  results.push(
+    await run('form-sqli', formInit(`q=${encodeURIComponent(SQLI)}`), '/form', 403),
+  )
+
+  // multipart.
+  results.push(await run('multipart-benign', multipartInit(), '/upload', 200))
+  results.push(
+    await run(
+      'multipart-sqli',
+      multipartInit({ extraFields: { q: SQLI } }),
+      '/upload',
       403,
     ),
   )
-  results.push(await scenario('xss-echo', 'POST', '/echo', { msg: XSS }, 403))
 
   const failed = results.filter((r) => !r.ok)
   const summary = results
-    .map((r) => `${r.ok ? 'PASS' : 'FAIL'} ${r.label.padEnd(14)} got=${r.actual} want=${r.expected}`)
+    .map((r) => `${r.ok ? 'PASS' : 'FAIL'} ${r.label.padEnd(18)} got=${r.actual} want=${r.expected}`)
     .join('\n')
   process.stdout.write(`[${NAME}] ${process.env.CASE_LABEL || ''}\n${summary}\n`)
   if (failed.length > 0) {

@@ -3,6 +3,9 @@
 // consumer with no bundler shim.
 
 const http = require('node:http')
+const querystring = require('node:querystring')
+const { Readable } = require('node:stream')
+const Busboy = require('busboy')
 const { createWAF, createWAFPool } = require('@coraza/core')
 const { recommended } = require('@coraza/coreruleset')
 
@@ -12,7 +15,15 @@ const poolSize = Number(process.env.POOL_SIZE || 2)
 const mode = process.env.MODE || 'block'
 
 async function main() {
-  const rules = recommended()
+  // Same three-rule disable as examples/express-app — without these the
+  // inbound anomaly score crosses the PL1 threshold of 5 on benign
+  // body-bearing POSTs and the matrix can't show the benign/malicious split.
+  const crsTuning = [
+    'SecRuleRemoveById 920420',
+    'SecRuleRemoveById 920350',
+    'SecRuleRemoveById 922110',
+  ].join('\n')
+  const rules = recommended({ extra: crsTuning })
   const waf = usePool
     ? await createWAFPool({ rules, mode, size: poolSize })
     : await createWAF({ rules, mode })
@@ -29,6 +40,24 @@ async function main() {
       req.on('data', (c) => chunks.push(c))
       req.on('end', () => resolve(Buffer.concat(chunks)))
       req.on('error', reject)
+    })
+  }
+
+  function parseMultipart(buf, contentType) {
+    return new Promise((resolve, reject) => {
+      const fields = []
+      const files = []
+      const bb = Busboy({ headers: { 'content-type': contentType } })
+      bb.on('field', (name) => fields.push(name))
+      bb.on('file', (field, stream, info) => {
+        let bytes = 0
+        stream.on('data', (chunk) => { bytes += chunk.length })
+        stream.on('end', () => files.push({ name: info.filename, bytes, field }))
+        stream.on('error', reject)
+      })
+      bb.on('error', reject)
+      bb.on('close', () => resolve({ fields, files }))
+      Readable.from([buf]).pipe(bb)
     })
   }
 
@@ -80,6 +109,22 @@ async function main() {
       if (req.method === 'POST' && url.pathname === '/echo') {
         let parsed
         try { parsed = JSON.parse(body.toString('utf8') || '{}') } catch { parsed = {} }
+        return sendJson(res, 200, parsed)
+      }
+      if (req.method === 'POST' && url.pathname === '/form') {
+        const ct = String(req.headers['content-type'] || '')
+        if (!ct.startsWith('application/x-www-form-urlencoded')) {
+          return sendJson(res, 400, { error: 'expected application/x-www-form-urlencoded' })
+        }
+        const parsed = querystring.parse(body.toString('utf8'))
+        return sendJson(res, 200, { received: parsed })
+      }
+      if (req.method === 'POST' && url.pathname === '/upload') {
+        const ct = String(req.headers['content-type'] || '')
+        if (!ct.startsWith('multipart/form-data')) {
+          return sendJson(res, 400, { error: 'expected multipart/form-data' })
+        }
+        const parsed = await parseMultipart(body, ct)
         return sendJson(res, 200, parsed)
       }
       sendJson(res, 404, { error: 'not found' })
