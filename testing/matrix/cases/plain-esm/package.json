@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@coraza/core": "workspace:*",
-    "@coraza/coreruleset": "workspace:*"
+    "@coraza/coreruleset": "workspace:*",
+    "busboy": "^1.6.0"
   }
 }
