@@ -1,5 +1,55 @@
 # @coraza/next
 
+## 0.1.0-preview.2
+
+### Patch Changes
+
+- 9f93ddc: Stop shipping `.d.cts` declaration files. tsup emits them with ESM
+  `import` syntax inside a `.cts` extension; Turbopack 16's package
+  scanner rejects this with "Specified module format (CommonJs) is not
+  matching the module format of the source code (EcmaScript Modules)"
+  and refuses to build any consumer that has the package in
+  `node_modules`.
+
+  `exports.types` in every package already points only at `.d.ts`,
+  which TypeScript resolves under both `nodenext` and `bundler`
+  moduleResolution for type-only imports — so the `.d.cts` files were
+  dead weight that only triggered false-positives.
+
+  Surfaced by the new bundler/runtime compatibility matrix exercising
+  Next 16 + Turbopack against tarballs installed via npm/yarn/pnpm.
+
+- f59ec36: Tighten peer-dep ranges to the set the matrix actually exercises:
+
+  - `@coraza/next` peer: `^15.0.0 || ^16.0.0` (was `^14.0.0 || ^15.0.0 || ^16.0.0`).
+    Next 14 middleware is **edge-runtime only** — `experimental.nodeMiddleware` did
+    not land until Next 15 — so `@coraza/next`'s Node-runtime adapter cannot work
+    there. Removing 14 from the peer range so `pnpm add @coraza/next` no longer
+    tells Next 14 users they're supported when they aren't.
+
+  - `@coraza/nestjs` peer: `^11.0.0` (was `^10.0.0 || ^11.0.0`). NestJS 10's
+    `ExceptionsHandler` does an `instanceof HttpException` check that fails when
+    the exception is constructed from `@coraza/nestjs`'s own `@nestjs/common@11`
+    copy under pnpm's strict resolution, returning a generic 500 instead of the
+    guard's intended 403. NestJS 11 has been out for over a year; pinning to it
+    removes a confusing failure mode.
+
+  This is a documentation correction more than a behavior change — the previous
+  ranges were aspirational, not validated. The compatibility matrix
+  (`testing/matrix/`) now exercises every supported combination on every PR.
+
+- 43602af: Documentation: rewrite the README version/runtime/WASM-loader table to
+  accurately describe Next 14 / 15 / 16. Add a "Known bundler quirks"
+  section pointing at the `@coraza/core` `createRequire` fallback that
+  makes Next 15 middleware work without a manual `wasmSource` override.
+  Link the `examples/next15-app` and `examples/next16-app` demos. No
+  runtime API change.
+- Updated dependencies [9f93ddc]
+- Updated dependencies [86cf133]
+- Updated dependencies [43602af]
+- Updated dependencies [f59ec36]
+  - @coraza/core@0.1.0-preview.2
+
 ## 0.1.0-preview.1
 
 ### Patch Changes
