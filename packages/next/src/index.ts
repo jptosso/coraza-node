@@ -112,6 +112,37 @@ export interface CorazaNextOptions {
    * Costs one extra `tx.matchedRules()` round-trip per block; default `false`.
    */
   verboseLog?: boolean
+  /**
+   * Override how the client IP is extracted from the incoming request.
+   *
+   * Default: first hop of `X-Forwarded-For` (e.g. `203.0.113.5` from
+   * `203.0.113.5, 10.0.0.1`). This is correct ONLY when there is a
+   * single trusted proxy in front of the app and that proxy prepends
+   * the real client IP. It's wrong on:
+   *
+   *   - **Cloudflare**: use `req.headers.get('cf-connecting-ip')`.
+   *   - **AWS ALB / Nginx default**: append-at-end → take the last
+   *     non-internal hop.
+   *   - **Direct exposure**: there is no `X-Forwarded-For`; rely on
+   *     the socket address (not exposed by `NextRequest`).
+   *
+   * The function MUST return a string. Return `''` if no IP can be
+   * determined; CRS IP-based rules will then no-op (advisory mode).
+   *
+   * Example:
+   * ```ts
+   * coraza({
+   *   waf,
+   *   extractClientIp: (req) =>
+   *     req.headers.get('cf-connecting-ip') ??
+   *     req.headers.get('x-forwarded-for')?.split(',').pop()?.trim() ?? '',
+   * })
+   * ```
+   *
+   * Without correct IP extraction, IP-based rules (REQUEST-913
+   * scanner detection, allowlist/blocklist) are advisory at best.
+   */
+  extractClientIp?: (req: NextRequest) => string
 }
 
 /**
@@ -158,6 +189,7 @@ export function createCorazaRunner(
     onWAFError = 'block',
     inspectBody = true,
     verboseLog = false,
+    extractClientIp = defaultExtractClientIp,
   } = options
   const matcher = resolveIgnoreMatcher(options.ignore, options.skip)
 
@@ -212,7 +244,7 @@ export function createCorazaRunner(
           url: url.pathname + url.search,
           protocol: 'HTTP/1.1',
           headers: headersOf(req.headers),
-          remoteAddr: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '',
+          remoteAddr: extractClientIp(req),
         },
         body,
       )
@@ -309,6 +341,16 @@ function headersOf(h: Headers): [string, string][] {
   const out: [string, string][] = []
   for (const [k, v] of h.entries()) out.push([k, v])
   return out
+}
+
+/**
+ * Default client-IP extractor: first hop of `X-Forwarded-For`. Same
+ * behaviour as before this option existed; correct only when a single
+ * trusted proxy in front of the app prepends the real client IP. See
+ * `CorazaNextOptions.extractClientIp` for proxy-topology overrides.
+ */
+export function defaultExtractClientIp(req: NextRequest): string {
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? ''
 }
 
 function hasBody(req: NextRequest): boolean {

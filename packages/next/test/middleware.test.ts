@@ -427,6 +427,65 @@ describe('@coraza/next', () => {
     await mw(makeReq('https://example.com/x'))
     expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
   })
+
+  // Issue #27 — remoteAddr extraction was hard-coded to first XFF hop.
+  // The new `extractClientIp` option is a function the consumer
+  // controls; whatever it returns is what reaches the WAF as
+  // `remoteAddr`. Lets users adapt to Cloudflare / ALB / Nginx /
+  // direct-exposure topologies without dropping createCorazaRunner.
+  it('issue #27: extractClientIp lets the consumer pick the IP source', async () => {
+    let observed = ''
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        observed = tx.conn?.addr ?? ''
+        return undefined
+      },
+    })
+    const mw = coraza({
+      waf,
+      extractClientIp: (req) => req.headers.get('cf-connecting-ip') ?? '',
+    })
+    await mw(
+      makeReq('https://example.com/', {
+        headers: {
+          'cf-connecting-ip': '203.0.113.99',
+          // Even with XFF set, the custom extractor wins.
+          'x-forwarded-for': '10.0.0.1, 10.0.0.2',
+        },
+      }),
+    )
+    expect(observed).toBe('203.0.113.99')
+  })
+
+  it('issue #27: default extractor still uses first XFF hop (no regression)', async () => {
+    let observed = ''
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        observed = tx.conn?.addr ?? ''
+        return undefined
+      },
+    })
+    const mw = coraza({ waf })
+    await mw(
+      makeReq('https://example.com/', {
+        headers: { 'x-forwarded-for': '203.0.113.5, 10.0.0.1' },
+      }),
+    )
+    expect(observed).toBe('203.0.113.5')
+  })
+
+  it('issue #27: extractClientIp can return "" (no IP) and CRS IP rules become advisory', async () => {
+    let observed: string | undefined
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        observed = tx.conn?.addr
+        return undefined
+      },
+    })
+    const mw = coraza({ waf, extractClientIp: () => '' })
+    await mw(makeReq('https://example.com/'))
+    expect(observed).toBe('')
+  })
 })
 
 // Compose-with-existing-proxy contract. The runner exposes a structured

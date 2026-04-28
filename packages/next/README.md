@@ -192,6 +192,36 @@ Default is `inspectBody: true`. **Flipping it off is a security
 trade-off** — body-bearing attacks become invisible. Document why
 you're doing it in your codebase.
 
+### Client IP extraction (`extractClientIp`)
+
+The default takes the first hop of `X-Forwarded-For`. That's correct
+ONLY when there's a single trusted proxy in front of the app and that
+proxy prepends the real client IP. It's wrong on every other topology:
+
+| Topology | Header / source | Pattern |
+| --- | --- | --- |
+| Cloudflare | `cf-connecting-ip` | `req.headers.get('cf-connecting-ip')` |
+| AWS ALB / Nginx default | last-hop of XFF | `xff.split(',').pop()?.trim()` |
+| Vercel (no Cloudflare) | first-hop of XFF | default works |
+| Direct exposure | none | `''` (CRS IP rules go advisory) |
+
+Pass `extractClientIp` to override:
+
+```ts
+export const proxy = coraza({
+  waf,
+  extractClientIp: (req) =>
+    req.headers.get('cf-connecting-ip') ??
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    '',
+})
+```
+
+The function MUST return a string. Return `''` if no IP can be
+determined; CRS IP-based rules (REQUEST-913 scanner detection,
+allowlist/blocklist) will then no-op without firing false positives.
+**Without correct IP extraction, IP-based rules are advisory at best.**
+
 ### Limitation — no response-body inspection
 
 Next middleware / proxy runs on the request boundary. Route Handlers own
