@@ -530,4 +530,35 @@ describe('@coraza/fastify', () => {
     expect(calls.some((s) => s.includes('941100'))).toBe(true)
     await app.close()
   })
+
+  // Issue #24 — multi-value list-form headers MUST reach the WAF as
+  // separate entries. The fix uses `req.raw.rawHeaders` (Node's
+  // IncomingMessage rawHeaders array) instead of the
+  // already-comma-joined `req.headers`.
+  it('issue #24: multi-value X-Forwarded-For reaches the WAF as separate entries', async () => {
+    const captured: Array<[string, string]> = []
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        captured.push(...tx.headers)
+        return undefined
+      },
+    })
+    const app = Fastify({ logger: false })
+    // Inject simulated multi-value rawHeaders via an onRequest hook so
+    // we don't depend on the test framework supporting duplicate
+    // headers (most don't).
+    app.addHook('onRequest', async (req) => {
+      ;(req.raw as unknown as { rawHeaders: string[] }).rawHeaders = [
+        'Host', 'localhost',
+        'X-Forwarded-For', '203.0.113.5',
+        'X-Forwarded-For', '198.51.100.7',
+      ]
+    })
+    await app.register(coraza, { waf })
+    app.get('/hi', async () => 'ok')
+    await app.inject({ method: 'GET', url: '/hi' })
+    const xff = captured.filter(([k]) => k === 'x-forwarded-for').map(([, v]) => v)
+    expect(xff).toEqual(['203.0.113.5', '198.51.100.7'])
+    await app.close()
+  })
 })

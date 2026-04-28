@@ -6,7 +6,21 @@ const encoder = new TextEncoder()
 
 export function headersOf(
   h: Record<string, string | string[] | number | undefined>,
+  rawHeaders?: string[],
 ): [string, string][] {
+  // Prefer `req.raw.rawHeaders` when available — it preserves
+  // multi-value headers (two X-Forwarded-For lines, multiple Set-Cookie
+  // entries, etc.) as distinct pairs. `req.headers` is the WHATWG-style
+  // merged form that joins list-headers into one comma-separated
+  // string, losing per-hop boundaries that CRS rules and audit logs
+  // depend on.
+  if (Array.isArray(rawHeaders) && rawHeaders.length >= 2) {
+    const out: [string, string][] = []
+    for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+      out.push([rawHeaders[i]!.toLowerCase(), rawHeaders[i + 1]!])
+    }
+    return out
+  }
   const out: [string, string][] = []
   for (const [k, v] of Object.entries(h)) {
     if (v === undefined) continue

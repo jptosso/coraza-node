@@ -70,10 +70,18 @@ interface HttpReq {
   originalUrl?: string
   httpVersion?: string
   headers: Record<string, string | string[] | undefined>
+  /**
+   * Node IncomingMessage.rawHeaders — flat [name, value, name, value, …]
+   * preserving original casing and multi-value pairs. We prefer this
+   * over `headers` because Node folds list-form headers (X-Forwarded-For
+   * etc.) into a comma-joined string at the IncomingMessage layer,
+   * losing per-hop boundaries.
+   */
+  rawHeaders?: string[]
   body?: unknown
   ip?: string
   socket?: { remotePort?: number; localPort?: number }
-  raw?: { httpVersion?: string }
+  raw?: { httpVersion?: string; rawHeaders?: string[] }
 }
 
 const encoder = new TextEncoder()
@@ -143,7 +151,7 @@ export class CorazaGuard implements CanActivate {
           method: req.method,
           url: req.originalUrl || req.url || '/',
           protocol: `HTTP/${req.httpVersion ?? req.raw?.httpVersion ?? '1.1'}`,
-          headers: headersOf(req.headers),
+          headers: headersOf(req.headers, req.rawHeaders ?? req.raw?.rawHeaders),
           remoteAddr: req.ip ?? '',
           remotePort: req.socket?.remotePort ?? 0,
           serverPort: req.socket?.localPort ?? 0,
@@ -209,7 +217,19 @@ export class CorazaGuard implements CanActivate {
 
 function headersOf(
   h: Record<string, string | string[] | undefined>,
+  rawHeaders?: string[],
 ): [string, string][] {
+  // Prefer `req.rawHeaders` (Express) / `req.raw.rawHeaders` (Fastify)
+  // when available — it preserves multi-value headers as distinct
+  // entries, where `req.headers` would join them into a single
+  // comma-separated string and lose the per-hop boundary.
+  if (Array.isArray(rawHeaders) && rawHeaders.length >= 2) {
+    const out: [string, string][] = []
+    for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+      out.push([rawHeaders[i]!.toLowerCase(), rawHeaders[i + 1]!])
+    }
+    return out
+  }
   const out: [string, string][] = []
   for (const [k, v] of Object.entries(h)) {
     if (v === undefined) continue
