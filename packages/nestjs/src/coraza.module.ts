@@ -8,7 +8,7 @@ import {
   type IgnoreSpec,
   type Interruption,
 } from '@coraza/core'
-import { CorazaGuard } from './coraza.guard.js'
+import { CorazaGuard, type CorazaBlockContext } from './coraza.guard.js'
 import { CORAZA_OPTIONS, CORAZA_WAF } from './tokens.js'
 
 /**
@@ -50,13 +50,22 @@ interface CorazaNestCommonOptions {
    * Also fires on WAF failure (with a synthesized 503 Interruption) when
    * `onWAFError: 'block'` — check `interruption.source === 'waf-error'`
    * to distinguish a rule hit from a WAF crash.
+   *
+   * The optional `ctx.matchedRules` (only populated when `verboseLog: true`)
+   * lists every rule that matched in the transaction.
    */
-  onBlock?: (interruption: Interruption) => HttpException
+  onBlock?: (interruption: Interruption, ctx?: CorazaBlockContext) => HttpException
   /**
    * What to do if the WAF throws mid-request. Default `'block'` (503).
    * `'allow'` lets the request through; see docs/threat-model.md.
    */
   onWAFError?: 'allow' | 'block'
+  /**
+   * Emit one `logger.warn` per matched rule on a block (ModSecurity
+   * error.log style). Default `false`. The default block log always
+   * includes `interruption.data`.
+   */
+  verboseLog?: boolean
 }
 
 interface CorazaNestBuiltOptions {

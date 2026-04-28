@@ -29,6 +29,7 @@ import type {
   Transaction,
   WorkerTransaction,
   Interruption,
+  MatchedRule,
   SkipOptions,
   IgnoreSpec,
   IgnoreContext,
@@ -44,10 +45,16 @@ export interface CorazaFastifyOptions {
    * defer construction.
    */
   waf: WAFLike
+  /**
+   * Override how a block decision is turned into a Fastify reply.
+   * The optional `ctx.matchedRules` lists every rule that matched in
+   * the transaction (only populated when `verboseLog: true`).
+   */
   onBlock?: (
     interruption: Interruption,
     req: FastifyRequest,
     reply: FastifyReply,
+    ctx?: CorazaBlockContext,
   ) => void | Promise<void>
   /** Run phase 3+4 on the response. Default false; see @coraza/express docs. */
   inspectResponse?: boolean
@@ -66,6 +73,20 @@ export interface CorazaFastifyOptions {
    *                       setups; document why you flipped it.
    */
   onWAFError?: 'allow' | 'block'
+  /**
+   * When `true`, emit one `log.warn('coraza: matched', { ... })` per
+   * matched rule on a block. Default `false`. The default block log
+   * always includes `interruption.data`.
+   */
+  verboseLog?: boolean
+}
+
+/**
+ * Optional context handed to `onBlock` as a fourth argument. Only
+ * populated when `verboseLog: true`.
+ */
+export interface CorazaBlockContext {
+  matchedRules: MatchedRule[]
 }
 
 const TX_SYMBOL = Symbol('coraza.tx')
@@ -78,6 +99,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
     onBlock = defaultBlock,
     inspectResponse = false,
     onWAFError = 'block',
+    verboseLog = false,
   } = opts
   const matcher = resolveIgnoreMatcher(opts.ignore, opts.skip)
 
@@ -109,6 +131,8 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
           req,
           reply,
           onBlock,
+          null,
+          verboseLog,
         )
       }
       return
@@ -134,7 +158,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
       if (interrupted) {
         const it = await tx.interruption()
         if (it) {
-          await emitBlock(it, req, reply, onBlock)
+          await emitBlock(it, req, reply, onBlock, tx, verboseLog)
         }
       }
     } catch (err) {
@@ -147,6 +171,8 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
           req,
           reply,
           onBlock,
+          tx,
+          verboseLog,
         )
       }
     }
@@ -252,11 +278,35 @@ async function emitBlock(
   req: FastifyRequest,
   reply: FastifyReply,
   onBlock: NonNullable<CorazaFastifyOptions['onBlock']>,
+  tx: AnyTx | null,
+  verboseLog: boolean,
 ): Promise<void> {
-  ;(req.log ?? (reply.server as { logger?: unknown }).logger as { warn?: (x: string) => void })?.warn?.(
-    `coraza: request blocked (rule ${interruption.ruleId} status ${interruption.status})`,
+  const log = (req.log ?? (reply.server as { logger?: unknown }).logger as {
+    warn?: (x: string) => void
+  })
+  const dataSuffix = interruption.data ? ` data="${interruption.data}"` : ''
+  log?.warn?.(
+    `coraza: request blocked (rule ${interruption.ruleId} status ${interruption.status})${dataSuffix}`,
   )
-  await onBlock(interruption, req, reply)
+  let matched: MatchedRule[] | undefined
+  if (verboseLog && tx) {
+    try {
+      matched = await tx.matchedRules()
+      for (const r of matched) {
+        log?.warn?.(
+          `coraza: matched (rule ${r.id} severity ${r.severity}) ${r.message}`,
+        )
+      }
+    } catch {
+      // matchedRules read failures must not turn a block into a 500.
+      matched = undefined
+    }
+  }
+  if (matched) {
+    await onBlock(interruption, req, reply, { matchedRules: matched })
+  } else {
+    await onBlock(interruption, req, reply)
+  }
 }
 
 import { headersOf, serializeBody, payloadToBytes } from './helpers.js'

@@ -20,6 +20,7 @@ import type {
   Transaction,
   WorkerTransaction,
   Interruption,
+  MatchedRule,
   SkipOptions,
   IgnoreSpec,
   IgnoreContext,
@@ -28,7 +29,17 @@ import type {
 import { buildIgnoreMatcher, skipToIgnore } from '@coraza/core'
 import { CORAZA_WAF, CORAZA_OPTIONS } from './tokens.js'
 
-type OnBlock = (interruption: Interruption) => HttpException
+/**
+ * Optional context passed as the second argument to a custom `onBlock`.
+ * Only populated when `verboseLog: true`; lets the consumer log every
+ * contributing CRS rule (the `Interruption` only carries the terminating
+ * rule, which for CRS is almost always 949110 / inbound anomaly score).
+ */
+export interface CorazaBlockContext {
+  matchedRules: MatchedRule[]
+}
+
+type OnBlock = (interruption: Interruption, ctx?: CorazaBlockContext) => HttpException
 
 /**
  * Default `onBlock` for `CorazaModule.forRoot`: a 403-ish HttpException
@@ -74,6 +85,7 @@ export class CorazaGuard implements CanActivate {
   private readonly matcher: ((ctx: IgnoreContext) => IgnoreVerdict) | null
   private readonly onWAFError: 'allow' | 'block'
   private readonly onBlock: OnBlock
+  private readonly verboseLog: boolean
 
   constructor(
     @Inject(CORAZA_WAF) private readonly waf: AnyWAF,
@@ -83,11 +95,13 @@ export class CorazaGuard implements CanActivate {
       skip?: SkipOptions | false
       onWAFError?: 'allow' | 'block'
       onBlock?: OnBlock
+      verboseLog?: boolean
     } = {},
   ) {
     this.matcher = resolveIgnoreMatcher(opts.ignore, opts.skip)
     this.onWAFError = opts.onWAFError ?? 'block'
     this.onBlock = opts.onBlock ?? defaultOnBlock
+    this.verboseLog = opts.verboseLog ?? false
   }
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -116,6 +130,7 @@ export class CorazaGuard implements CanActivate {
     ;(req as HttpReq & { _corazaTx?: AnyTx })._corazaTx = tx
 
     let interruption: Interruption | null = null
+    let matched: MatchedRule[] | undefined
     try {
       if (await tx.isRuleEngineOff()) return true
 
@@ -135,7 +150,17 @@ export class CorazaGuard implements CanActivate {
         },
         body,
       )
-      if (interrupted) interruption = await tx.interruption()
+      if (interrupted) {
+        interruption = await tx.interruption()
+        // Pull matched rules BEFORE the finally block closes the tx.
+        if (interruption && this.verboseLog) {
+          try {
+            matched = await tx.matchedRules()
+          } catch {
+            matched = undefined
+          }
+        }
+      }
     } catch (err) {
       this.logger.error(`middleware error: ${(err as Error).message}`)
       if (this.onWAFError === 'block') {
@@ -163,10 +188,20 @@ export class CorazaGuard implements CanActivate {
     }
 
     if (interruption) {
+      const dataSuffix = interruption.data ? ` data="${interruption.data}"` : ''
       this.logger.warn(
-        `blocked request (rule=${interruption.ruleId} action=${interruption.action} status=${interruption.status})`,
+        `blocked request (rule=${interruption.ruleId} action=${interruption.action} status=${interruption.status})${dataSuffix}`,
       )
-      throw this.onBlock(interruption)
+      if (matched) {
+        for (const r of matched) {
+          this.logger.warn(
+            `coraza: matched (rule=${r.id} severity=${r.severity}) ${r.message}`,
+          )
+        }
+      }
+      throw matched
+        ? this.onBlock(interruption, { matchedRules: matched })
+        : this.onBlock(interruption)
     }
     return true
   }

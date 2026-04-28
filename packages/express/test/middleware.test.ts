@@ -622,4 +622,44 @@ describe('@coraza/express', () => {
     app.get('/img/logo.png', (_req, res) => res.send('ok'))
     expect((await request(app).get('/img/logo.png')).status).toBe(403)
   })
+
+  // Issue #23 — block log loses signal. The default line MUST include
+  // `interruption.data` (free, the WASM has already populated it) and
+  // verboseLog MUST surface contributing matched rules so a CRS 949110
+  // anomaly-score block tells you which underlying rules tripped.
+  it('issue #23: default block log includes interruption.data and verboseLog emits matched rules', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        tx.matchedRules = [
+          { id: 942100, severity: 2, message: 'SQL Injection (libinjection)' },
+          { id: 941100, severity: 2, message: 'XSS reflected' },
+        ]
+        return {
+          ruleId: 949110,
+          action: 'deny',
+          status: 403,
+          data: 'Inbound Anomaly Score Exceeded (Total Score: 10)',
+        }
+      },
+    })
+    const warn = vi.fn()
+    waf.logger = { ...waf.logger, warn }
+    const app = appWith(coraza({ waf, verboseLog: true }))
+    await request(app).get('/hi')
+    expect(warn).toHaveBeenCalledWith(
+      'coraza: request blocked',
+      expect.objectContaining({
+        ruleId: 949110,
+        data: 'Inbound Anomaly Score Exceeded (Total Score: 10)',
+      }),
+    )
+    expect(warn).toHaveBeenCalledWith(
+      'coraza: matched',
+      expect.objectContaining({ ruleId: 942100, severity: 2, msg: 'SQL Injection (libinjection)' }),
+    )
+    expect(warn).toHaveBeenCalledWith(
+      'coraza: matched',
+      expect.objectContaining({ ruleId: 941100 }),
+    )
+  })
 })

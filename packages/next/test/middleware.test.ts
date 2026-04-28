@@ -362,6 +362,71 @@ describe('@coraza/next', () => {
     await mw(req)
     expect(arrayBufferSpy).toHaveBeenCalled()
   })
+
+  // Issue #23 — block log loses signal. Default block log MUST include
+  // `interruption.data` (free) and verboseLog MUST surface contributing
+  // matched rules so a CRS 949110 / anomaly-score block tells you which
+  // underlying rules pushed the score over the threshold. Without this
+  // the operator-visible line collapses to "949110 / 403 / deny" which
+  // is unactionable.
+  it('issue #23: default block log includes interruption.data and verboseLog emits matched rules', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        // Pretend underlying rules contributed to the anomaly score.
+        tx.matchedRules = [
+          { id: 942100, severity: 2, message: 'SQL Injection (libinjection)' },
+          { id: 941100, severity: 2, message: 'XSS reflected' },
+        ]
+        return {
+          ruleId: 949110,
+          action: 'deny',
+          status: 403,
+          data: 'Inbound Anomaly Score Exceeded (Total Score: 10)',
+        }
+      },
+    })
+    const warn = vi.fn()
+    waf.logger = { ...waf.logger, warn }
+    const mw = coraza({ waf, verboseLog: true })
+    await mw(makeReq('https://example.com/x'))
+    // Default block line carries interruption.data (the reason string).
+    expect(warn).toHaveBeenCalledWith(
+      'coraza: request blocked',
+      expect.objectContaining({
+        ruleId: 949110,
+        data: 'Inbound Anomaly Score Exceeded (Total Score: 10)',
+      }),
+    )
+    // verboseLog: true surfaces every contributing rule.
+    expect(warn).toHaveBeenCalledWith(
+      'coraza: matched',
+      expect.objectContaining({ ruleId: 942100, severity: 2, msg: 'SQL Injection (libinjection)' }),
+    )
+    expect(warn).toHaveBeenCalledWith(
+      'coraza: matched',
+      expect.objectContaining({ ruleId: 941100 }),
+    )
+  })
+
+  it('issue #23: matchedRules are passed to onBlock(ctx) when verboseLog is enabled', async () => {
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        tx.matchedRules = [{ id: 942100, severity: 2, message: 'SQLi' }]
+        return { ruleId: 949110, action: 'deny', status: 403, data: 'anomaly' }
+      },
+    })
+    let received: unknown
+    const mw = coraza({
+      waf,
+      verboseLog: true,
+      onBlock: (it, _req, ctx) => {
+        received = ctx
+        return new Response(`blocked ${it.ruleId}`, { status: 403 })
+      },
+    })
+    await mw(makeReq('https://example.com/x'))
+    expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
+  })
 })
 
 // Compose-with-existing-proxy contract. The runner exposes a structured
