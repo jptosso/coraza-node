@@ -422,5 +422,7 @@ a failure is framework noise or an engine regression.
 | Cross-OS / npm+yarn / tarball CI | `.github/workflows/{matrix,bench,tarball-smoke}.yml` (cross-OS runners, bench gate, npm/yarn legs, tarball smoke) |
 | Example app (Express/Fastify/Next15/Next16/NestJS) | `examples/<name>-app/` — every app implements the shared HTTP contract from `examples/shared/` |
 | CI / release workflow | `.github/workflows/*.yml` |
+| Bundler / framework matrix (workspace install) | `testing/matrix/cases/*` + `.github/workflows/matrix.yml` |
+| Package-manager matrix (tarball install) | `testing/matrix/pm-consumers/*` + `.github/workflows/matrix-pkg-managers.yml` |
 | FTW corpus / overrides | `testing/ftw/*` + `.github/workflows/ftw.yml` |
 | Docs an agent will read | THIS FILE. Not a new doc. |

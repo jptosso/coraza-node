@@ -1,0 +1,201 @@
+name: Compatibility Matrix · Package Managers
+
+# Sibling to matrix.yml. The `Compatibility Matrix` job (matrix.yml) only
+# proves things work under pnpm — the workspace's own package manager.
+# pnpm uses a strict, symlinked node_modules layout; npm and yarn use
+# flat hoisting. A package whose peerDependencies, transitive deps, or
+# `import` resolution implicitly assumes pnpm's layout can fail under
+# npm/yarn (peer-dep duplication, instanceof mismatches across two
+# copies of a dep, missing peer auto-install). The matrix in matrix.yml
+# wouldn't catch any of those.
+#
+# This workflow reproduces what an end user does: `pnpm pack` every
+# publishable @coraza/* package on the workspace side (we keep building
+# with pnpm), then in a fresh consumer project — outside the repo — run
+# the target package manager's `init`, install the tarballs and the
+# framework, drop in a minimal consumer file, boot, and run the
+# 3-scenario probe (testing/matrix/scripts/check.mjs).
+#
+# Yarn means **Yarn 4 (Berry)** — Yarn 1 / Classic is unmaintained.
+# Yarn 4 defaults to PnP; we override with `nodeLinker: node-modules`
+# because PnP changes module resolution semantics and we want to test
+# the same flat-hoisting behaviour npm uses.
+
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+  schedule:
+    # Tuesdays 09:00 UTC. Offset from matrix.yml (Mondays 08:00) so a
+    # bad night for a pm registry doesn't take both jobs out at once.
+    - cron: '0 9 * * 2'
+
+concurrency:
+  group: matrix-pkg-managers-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-wasm:
+    name: Build WASM (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Same cache key as ci.yml + matrix.yml so all three workflows share
+      # the WASM artifact. A single Go change rebuilds once across all
+      # three workflows.
+      - name: Cache compiled coraza.wasm
+        id: wasm-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: packages/core/src/wasm/coraza.wasm
+          key: wasm-${{ runner.os }}-${{ hashFiles('wasm/**/*.go', 'wasm/go.mod', 'wasm/go.sum', 'wasm/Dockerfile*', 'wasm/Makefile', 'wasm/version.txt') }}
+          restore-keys: ''
+
+      - name: Build with reproducible Docker image
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: make -C wasm wasm-docker
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coraza-wasm
+          path: packages/core/src/wasm/coraza.wasm
+          retention-days: 7
+
+  pack:
+    name: Pack publishable packages
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coraza-wasm
+          path: packages/core/src/wasm
+      - uses: pnpm/action-setup@903f9c1a6ebcba6cf41d87230be49611ac97822e # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build core + adapters
+        run: pnpm turbo run build --filter='./packages/*'
+
+      # `pnpm pack` produces a `.tgz` per publishable package (driven by
+      # `files` in each package.json). It only operates on the current
+      # directory, so we cd into each package dir and write all tarballs
+      # to a single flat output dir — the per-pm legs then do
+      # `pm install <dir>/*.tgz` without iterating.
+      - name: Pack tarballs
+        run: |
+          mkdir -p tarballs
+          dest="$(pwd)/tarballs"
+          for pkg in core coreruleset express fastify nestjs next; do
+            ( cd "packages/${pkg}" && pnpm pack --pack-destination "${dest}" )
+          done
+          echo "--- packed tarballs ---"
+          ls -la tarballs/
+
+      - name: Upload tarballs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coraza-tarballs
+          path: tarballs/
+          retention-days: 7
+
+  consumer:
+    name: ${{ matrix.case }} · ${{ matrix.pm }}
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Single Node version on purpose: this workflow's axis is the
+        # **package manager**, not the runtime. matrix.yml already
+        # covers Node 22 × 24 across all cases.
+        node: ['22']
+        pm: [npm, yarn, pnpm]
+        case: [express5, fastify5, nestjs11, plain-esm]
+        # next16-proxy is included as a non-blocking signal: see the
+        # `include` block + `continue-on-error` mapping below. The
+        # known regression is tracked on the PR opening this matrix —
+        # Turbopack 16 fails on @coraza/core's tsup-emitted `.d.cts`
+        # type declarations when the package is installed flat (npm /
+        # yarn) or from a tarball (any pm). The pnpm-workspace leg in
+        # matrix.yml passes only because `workspace:*` becomes a
+        # symlink that side-steps Turbopack's package-directory scan.
+        # We surface the failure here intentionally rather than hide it.
+        include:
+          - pm: npm
+            case: next16-proxy
+          - pm: yarn
+            case: next16-proxy
+          - pm: pnpm
+            case: next16-proxy
+    # Per-leg continue-on-error: only the next16-proxy legs are allowed
+    # to fail without blocking the workflow. Every other leg is a hard
+    # gate — npm or yarn breaking express / fastify / nestjs / plain
+    # consumer install would be an immediate publish-blocker.
+    continue-on-error: ${{ matrix.case == 'next16-proxy' }}
+    env:
+      CASE: ${{ matrix.case }}
+      PM: ${{ matrix.pm }}
+      LEG_PORT: '43000'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coraza-tarballs
+          path: ${{ runner.temp }}/tarballs
+
+      # corepack ships with Node and gives us a deterministic Yarn 4 and
+      # pnpm without depending on a setup-action's pin. We enable it
+      # unconditionally and let each leg pick its own pm version.
+      - name: Enable corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.12.0 --activate
+          corepack prepare yarn@stable --activate
+
+      - name: Print pm versions
+        run: |
+          node --version
+          npm --version
+          corepack yarn --version || true
+          corepack pnpm --version || true
+
+      - name: Run consumer leg
+        env:
+          CASE_HOST: 127.0.0.1
+          TARBALL_DIR: ${{ runner.temp }}/tarballs
+          CONSUMER_ROOT: ${{ runner.temp }}/pm-consumer
+        run: bash testing/matrix/pm-consumers/run-consumer.sh
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pm-consumer-log-${{ matrix.case }}-${{ matrix.pm }}
+          path: ${{ runner.temp }}/pm-consumer/log
+          retention-days: 14
