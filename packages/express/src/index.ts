@@ -206,7 +206,7 @@ export function coraza(options: CorazaExpressOptions): RequestHandler {
         method: req.method,
         url: req.originalUrl || req.url,
         protocol: `HTTP/${req.httpVersion}`,
-        headers: headersOf(req.headers),
+        headers: headersOf(req.headers, (req as Request & { rawHeaders?: string[] }).rawHeaders),
         remoteAddr: req.ip ?? '',
         remotePort: req.socket.remotePort ?? 0,
         serverPort: req.socket.localPort ?? 0,
@@ -384,9 +384,27 @@ function emitBlockSync(
 
 function headersOf(
   h: Record<string, string | string[] | undefined>,
+  rawHeaders?: string[],
 ): [string, string][] {
   // Must return a concrete array (not a generator) so the WAFPool path can
   // structured-clone it across the MessagePort.
+  //
+  // Prefer `req.rawHeaders` when available — it preserves multi-value
+  // headers (e.g. two `X-Forwarded-For` lines) as separate entries.
+  // `req.headers` joins those into a single comma-separated string for
+  // most names (Node folds list-form headers per RFC 7230), which loses
+  // the per-hop boundary that CRS IP-allowlist rules and audit logs
+  // care about.
+  if (Array.isArray(rawHeaders) && rawHeaders.length >= 2) {
+    const out: [string, string][] = []
+    for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+      // rawHeaders preserves original casing; lower-case to match
+      // req.headers convention so downstream Coraza lookups normalise
+      // identically across the two code paths.
+      out.push([rawHeaders[i]!.toLowerCase(), rawHeaders[i + 1]!])
+    }
+    return out
+  }
   const out: [string, string][] = []
   for (const k in h) {
     const v = h[k]

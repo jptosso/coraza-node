@@ -148,7 +148,7 @@ const pluginImpl: FastifyPluginAsync<CorazaFastifyOptions> = async (fastify, opt
           method: req.method,
           url: req.url,
           protocol: `HTTP/${req.raw.httpVersion ?? '1.1'}`,
-          headers: headersOf(req.headers),
+          headers: headersOf(req.headers, req.raw?.rawHeaders),
           remoteAddr: req.ip,
           remotePort: req.socket.remotePort ?? 0,
           serverPort: req.socket.localPort ?? 0,

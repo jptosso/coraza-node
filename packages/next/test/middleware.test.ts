@@ -427,6 +427,44 @@ describe('@coraza/next', () => {
     await mw(makeReq('https://example.com/x'))
     expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
   })
+
+  // Issue #24 — multi-value list-form headers MUST reach the WAF as
+  // distinct entries, not as a single comma-joined string. This is most
+  // visible on `x-forwarded-for` where every CRS IP-allowlist or
+  // scanner-detection rule that splits on hop boundaries silently
+  // misfires when the per-hop addresses are smashed into one token.
+  it('issue #24: multi-value X-Forwarded-For reaches the WAF as separate header entries', async () => {
+    const { waf, state } = mockWAF('block')
+    const mw = coraza({ waf })
+    // Build a Headers object with two X-Forwarded-For entries — the
+    // Headers.append() path is the only way to construct distinct
+    // values for the same name (the constructor would dedupe).
+    const headers = new Headers()
+    headers.append('x-forwarded-for', '203.0.113.5')
+    headers.append('x-forwarded-for', '198.51.100.7')
+    const req = new NextRequest(new Request('https://example.com/', { headers }))
+    await mw(req)
+    // The bundle decoder writes captured headers to tx.headers; assert
+    // both XFF values are there as separate entries.
+    expect(state.nextTx).toBeGreaterThanOrEqual(1)
+    // The transaction was already destroyed when the bundle finished;
+    // capture state on the next-to-last tx by intercepting onHeaders
+    // instead. Re-run with a stub to inspect.
+    const captured: Array<[string, string]> = []
+    const { waf: waf2 } = mockWAF('block', {
+      onHeaders: (tx) => {
+        captured.push(...tx.headers)
+        return undefined
+      },
+    })
+    const mw2 = coraza({ waf: waf2 })
+    const headers2 = new Headers()
+    headers2.append('x-forwarded-for', '203.0.113.5')
+    headers2.append('x-forwarded-for', '198.51.100.7')
+    await mw2(new NextRequest(new Request('https://example.com/', { headers: headers2 })))
+    const xff = captured.filter(([k]) => k === 'x-forwarded-for').map(([, v]) => v)
+    expect(xff).toEqual(['203.0.113.5', '198.51.100.7'])
+  })
 })
 
 // Compose-with-existing-proxy contract. The runner exposes a structured

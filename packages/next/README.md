@@ -163,6 +163,26 @@ coraza({
 `verboseLog` adds one `tx.matchedRules()` round-trip per blocked
 request; default is `false`.
 
+### Multi-value request headers
+
+Coraza receives every value of a multi-value header as a separate
+`[name, value]` entry, not the WHATWG-`Headers`-joined `"v1, v2"`
+string. This matters most for IP-aware list-form headers:
+
+- `Set-Cookie` — split via `Headers.getSetCookie()` (response side).
+- `X-Forwarded-For`, `Forwarded`, `Via`, `Warning` — split on the RFC
+  7230 list separator (`,` plus optional whitespace) so each per-hop
+  token reaches the WAF as its own value. CRS IP-allowlist and
+  scanner-detection rules need this to evaluate the original client
+  hop, not a smashed string.
+
+`Cookie` is intentionally NOT split: by RFC 6265, multiple cookies in
+a single header are separated by `; ` (not `,`), and commas can appear
+inside cookie values. If a proxy in front of you sends multiple
+`Cookie` *header lines* (spec-violating but it happens), they reach
+the WAF as the WHATWG-joined string. If that's a hot path for you,
+pre-process `req.headers` before handing it to Coraza.
+
 ### Body handling
 
 The runner reads the request body via `req.arrayBuffer()` before

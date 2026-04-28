@@ -662,4 +662,45 @@ describe('@coraza/express', () => {
       expect.objectContaining({ ruleId: 941100 }),
     )
   })
+
+  // Issue #24 — multi-value list-form headers MUST reach the WAF as
+  // distinct entries, not as a single comma-joined string. Without
+  // `req.rawHeaders` Node folds two `X-Forwarded-For` lines into one
+  // string, hiding the per-hop boundary that CRS IP-allowlist rules
+  // depend on.
+  it('issue #24: multi-value X-Forwarded-For reaches the WAF as separate entries (rawHeaders path)', async () => {
+    const captured: Array<[string, string]> = []
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        captured.push(...tx.headers)
+        return undefined
+      },
+    })
+    const app = express()
+    app.use(coraza({ waf }))
+    app.get('/hi', (_req, res) => res.send('ok'))
+    // supertest sends a single XFF; replace it with two via the raw
+    // socket-level header lines preserved in req.rawHeaders.
+    await request(app)
+      .get('/hi')
+      .set('X-Forwarded-For', '203.0.113.5')
+      .set('X-Forwarded-For', '198.51.100.7')
+    // supertest's .set() overrides duplicates, so simulate the raw
+    // multi-line case by pushing into rawHeaders manually.
+    captured.length = 0
+    const app2 = express()
+    app2.use((req, _res, next) => {
+      ;(req as unknown as { rawHeaders: string[] }).rawHeaders = [
+        'X-Forwarded-For', '203.0.113.5',
+        'X-Forwarded-For', '198.51.100.7',
+        'Host', 'localhost',
+      ]
+      next()
+    })
+    app2.use(coraza({ waf }))
+    app2.get('/hi', (_req, res) => res.send('ok'))
+    await request(app2).get('/hi')
+    const xff = captured.filter(([k]) => k === 'x-forwarded-for').map(([, v]) => v)
+    expect(xff).toEqual(['203.0.113.5', '198.51.100.7'])
+  })
 })

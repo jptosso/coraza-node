@@ -305,9 +305,48 @@ export function defaultBlock(interruption: Interruption, _req: NextRequest): Res
   )
 }
 
+// RFC 7230 §3.2.2 list-form headers — multiple values delivered as
+// separate header lines are equivalent to a single line with values
+// joined by ", ". `Headers.entries()` only ever produces the joined
+// form, but Coraza's tokenizers (and CRS variables like
+// REQUEST_HEADERS:X-Forwarded-For) work better when each value is
+// delivered as its own [name, value] entry — e.g. for IP-allowlist
+// checks against the original client hop. We split the joined string
+// on `, ` so each token reaches the WAF as its own header value.
+//
+// `cookie` is intentionally NOT in this set: by RFC 6265 multiple cookies
+// inside a single Cookie header are separated by "; ", not ", ", and
+// commas can legitimately appear inside cookie values. Splitting on ","
+// would corrupt the cookie. Multiple Cookie *header lines* are
+// spec-violating; leave them as the WHATWG-joined string.
+const RFC7230_LIST_HEADERS = new Set([
+  'x-forwarded-for',
+  'forwarded',
+  'via',
+  'warning',
+])
+
 function headersOf(h: Headers): [string, string][] {
   const out: [string, string][] = []
-  for (const [k, v] of h.entries()) out.push([k, v])
+  // Preserve every individual Set-Cookie via the spec-blessed accessor.
+  // Most relevant on the response path (not implemented in this adapter
+  // yet) but safe to include for symmetry — `getSetCookie()` returns []
+  // when no Set-Cookie header is present.
+  for (const c of h.getSetCookie()) out.push(['set-cookie', c])
+  for (const [k, v] of h.entries()) {
+    if (k === 'set-cookie') continue // already emitted via getSetCookie()
+    if (RFC7230_LIST_HEADERS.has(k) && v.includes(',')) {
+      // Split on RFC 7230 list separator (`,` with optional whitespace).
+      // Preserves the relative order of values; each non-empty token
+      // becomes its own [k, v] pair so two `X-Forwarded-For` header
+      // lines reach the WAF as two distinct values, not "v1, v2".
+      for (const tok of v.split(/\s*,\s*/)) {
+        if (tok.length > 0) out.push([k, tok])
+      }
+      continue
+    }
+    out.push([k, v])
+  }
   return out
 }
 

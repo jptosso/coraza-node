@@ -369,4 +369,35 @@ describe('CorazaGuard', () => {
     ).rejects.toThrow(HttpException)
     expect(received).toEqual({ matchedRules: [{ id: 942100, severity: 2, message: 'SQLi' }] })
   })
+
+  // Issue #24 — multi-value list-form headers MUST reach the WAF as
+  // separate entries. NestJS bridges to either Express or Fastify;
+  // both expose Node's IncomingMessage with `rawHeaders` (Express:
+  // `req.rawHeaders`; Fastify: `req.raw.rawHeaders`). We prefer
+  // either over the comma-joined `req.headers`.
+  it('issue #24: multi-value X-Forwarded-For reaches the WAF as separate entries', async () => {
+    const captured: Array<[string, string]> = []
+    const { waf } = mockWAF('block', {
+      onHeaders: (tx) => {
+        captured.push(...tx.headers)
+        return undefined
+      },
+    })
+    const guard = new CorazaGuard(waf)
+    await guard.canActivate(
+      ctx({
+        method: 'GET',
+        url: '/',
+        headers: { host: 'localhost' },
+        rawHeaders: [
+          'Host', 'localhost',
+          'X-Forwarded-For', '203.0.113.5',
+          'X-Forwarded-For', '198.51.100.7',
+        ],
+        socket: {},
+      }),
+    )
+    const xff = captured.filter(([k]) => k === 'x-forwarded-for').map(([, v]) => v)
+    expect(xff).toEqual(['203.0.113.5', '198.51.100.7'])
+  })
 })
